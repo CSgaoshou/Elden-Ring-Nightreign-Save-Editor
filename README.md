@@ -1,8 +1,4 @@
-# 🌙 Nightreign Relic Editor
-
-A powerful and user-friendly save editor for **Nightreign**, focused on full control over **Relics**, save data, and character progression for PC/PS4.
-
-Original address: https://github.com/alfizari/Elden-Ring-Nightreign-Save-Editor. Since some features were missing, I made my own modifications.
+# Original address: https://github.com/alfizari/Elden-Ring-Nightreign-Save-Editor. Since some features were missing, I made my own modifications.
 
 原地址：https://github.com/alfizari/Elden-Ring-Nightreign-Save-Editor.  因为一些功能没有，所以我自己做了修改
 
