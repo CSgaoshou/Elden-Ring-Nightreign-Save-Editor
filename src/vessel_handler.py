@@ -331,8 +331,9 @@ class VesselParser:
         while cursor < len(globals.data):
             p_start = cursor
             header = struct.unpack_from("<B", globals.data, cursor)[0]
-            if header != 0x01:
-                break
+            if header != 0x01:  # Removed preset
+                cursor += 80  # Skip the rest of this preset block
+                continue
 
             # Offsets for custom preset fields
             p_offsets = {
