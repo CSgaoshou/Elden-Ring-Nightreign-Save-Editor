@@ -4539,15 +4539,6 @@ class SaveEditorGUI:
         lang_mgr.register(btn_delete_all, N_("🗑️ Delete All Illegal"))
         btn_delete_all.pack(side="left", padx=5)
 
-        btn_delete_slct = ttk.Button(
-            controls_frame,
-            text="🗑️ Mass Delete Selected",
-            command=self.mass_delete_relics,
-            style="Danger.TButton",
-        )
-        lang_mgr.register(btn_delete_slct, N_("🗑️ Mass Delete Selected"))
-        btn_delete_slct.pack(side="left", padx=5)
-
         btn_mfix = ttk.Button(
             controls_frame, text="🔧 Mass Fix", command=self.mass_fix_incorrect_ids
         )
@@ -5806,68 +5797,6 @@ class SaveEditorGUI:
 
         self.tree.selection_remove(self.tree.selection())
         self.tree.selection_set(new_selection)
-
-    def mass_delete_relics(self):
-        """Delete all currently selected relics"""
-        selection = self.tree.selection()
-        if not selection:
-            msg_warning(
-                "Warning",
-                "No relics selected. Use the tree selection to choose relics to delete.",
-            )
-            return
-
-        # Check for forbidden relics in selection
-        forbidden_count = 0
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            if "forbidden" in tags:
-                forbidden_count += 1
-
-        # Confirmation message
-        confirm_msg = (
-            f"Are you sure you want to delete {len(selection)} selected relic(s)?"
-        )
-        if forbidden_count > 0:
-            confirm_msg += (
-                f"\n\n⚠️ WARNING: {forbidden_count} of these are 'Do Not Edit' relics!"
-            )
-            confirm_msg += "\n\nDeleting these may cause issues!"
-
-        result = messagebox.askyesno(
-            "Confirm Mass Delete",
-            confirm_msg,
-            icon="warning" if forbidden_count > 0 else "question",
-        )
-
-        if not result:
-            return
-
-        # Delete all selected relics
-        deleted_count = 0
-        failed_count = 0
-
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            ga_handle = int(tags[0])
-            item_id = int(tags[1])
-
-            result = self.inventory_handler.remove_relic_from_inventory(ga_handle)
-            if result:
-                deleted_count += 1
-            else:
-                failed_count += 1
-
-        # Show result
-        if deleted_count > 0:
-            message = f"Successfully deleted {deleted_count} relic(s)"
-            if failed_count > 0:
-                message += f"\n{failed_count} failed to delete"
-            messagebox.showinfo("Mass Delete Complete", message)
-            self.refresh_inventory_lightly()
-            save_current_data()
-        else:
-            messagebox.showerror("Error", "Failed to delete any relics")
 
     def mass_fix_incorrect_ids(self):
         """Find and fix all problematic relics (illegal and strict invalid)"""
