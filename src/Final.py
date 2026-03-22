@@ -16,43 +16,43 @@ TODO:
     Switchable message settings
 """
 
-from main_file import decrypt_ds2_sl2, encrypt_modified_files
-from main_file_import import decrypt_ds2_sl2_import
-import json, shutil, os, struct
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-from pathlib import Path
-
 # openpyxl is lazy-loaded in export/import functions to speed up startup
-from typing import Optional, Any, List, Dict, Union
+import inspect
+import json
+import logging
+import os
+import re
+import shutil
+import struct
 import sys
 import threading
-import re
-import logging
-import inspect
+import tkinter as tk
 import zipfile
 from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
 from PIL import Image, ImageTk
 
 # project modules
-from log_config import setup_logging
-from basic_class import Item
 import globals
-from globals import (
-    ITEM_TYPE_RELIC,
-    ITEM_TYPE_GOODS,
-    WORKING_DIR,
-    COLOR_MAP,
-    UNIQUENESS_IDS,
-    ICONS_DIR,
-)
-
-from relic_checker import RelicChecker, InvalidReason, is_curse_invalid
+from basic_class import Item
+from config_manager import ConfigManager
+from globals import (COLOR_MAP, ICONS_DIR, ITEM_TYPE_GOODS, ITEM_TYPE_RELIC,
+                     UNIQUENESS_IDS, WORKING_DIR)
+from inventory_handler import InventoryHandler
+from language_manager import N_, lang_mgr
+from log_config import setup_logging
+from main_file import decrypt_ds2_sl2, encrypt_modified_files
+from main_file_import import decrypt_ds2_sl2_import
+from relic_checker import InvalidReason, RelicChecker, is_curse_invalid
 from source_data_handler import SourceDataHandler, get_system_language
 from vessel_handler import LoadoutHandler, is_vessel_available
-from inventory_handler import InventoryHandler
-from config_manager import ConfigManager
-from language_manager import lang_mgr, N_
+
+# Forward declaration for IDE/Linter support
+if TYPE_CHECKING:
+    def _(message: str) -> str: ...
 
 
 def get_base_dir():
