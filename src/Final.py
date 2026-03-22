@@ -1752,6 +1752,7 @@ class SaveEditorGUI:
         label_text="Please wait...",
         callback=None,
         progress_bar=None,
+        delay_ms=500,
     ):
         """
         A universal async wrapper to run heavy tasks without freezing the GUI.
@@ -1762,10 +1763,15 @@ class SaveEditorGUI:
         :param label_text: Message displayed in the loading popup.
         :param callback: A function to run in the main thread after task_func finishes successfully.
         :param progress_bar: If True, shows a determinate progress bar; otherwise indeterminate.
+        :param delay_ms: Show the loading popup after delay. Useful to reduce flickering for quick tasks.
         :type progress_bar: bool
         """
         # 1. Create a top-level loading window
         loading_win = tk.Toplevel(self.root)
+
+        # Hide the window initial
+        loading_win.withdraw() 
+
         loading_win.config(bg=self.color_theme.base["card_bg"])
         loading_win.title(title)
         loading_win.geometry("350x150")
@@ -1781,12 +1787,12 @@ class SaveEditorGUI:
         x = (
             self.root.winfo_x()
             + (self.root.winfo_width() // 2)
-            - (loading_win.winfo_width() // 2)
+            - (loading_win.winfo_reqwidth() // 2) # use reqwidth since window is hiding
         )
         y = (
             self.root.winfo_y()
             + (self.root.winfo_height() // 2)
-            - (loading_win.winfo_height() // 2)
+            - (loading_win.winfo_reqheight() // 2)
         )
         loading_win.geometry(f"+{x}+{y}")
 
@@ -1807,6 +1813,15 @@ class SaveEditorGUI:
 
         # Lock main GUI
         loading_win.grab_set()
+
+        task_status = {"finished": False}
+
+        def show_loading_window():
+            if not task_status["finished"] and loading_win.winfo_exists():
+                loading_win.deiconify()
+
+        # Show the window after delay
+        delay_timer_id = self.root.after(delay_ms, show_loading_window)
 
         def _ui_update(value, new_text):
             # Check if window still exists before updating
@@ -1838,6 +1853,9 @@ class SaveEditorGUI:
                 self.root.after(0, lambda: finish_task(False, err_msg))
 
         def finish_task(success, err_msg=None):
+            task_status["finished"] = True
+            self.root.after_cancel(delay_timer_id) 
+
             if loading_win.winfo_exists():
                 loading_win.grab_release()
                 loading_win.destroy()
