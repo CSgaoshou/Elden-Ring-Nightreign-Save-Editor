@@ -7332,9 +7332,9 @@ class ModifyRelicDialog:
 
         self.update_debug_info()
 
-    def _update_effect_indicators(self):
-        """Update effect slot labels to show validation status"""
-        effect_labels_base = [
+    def _update_effect_indicator(self, slot_index: int):
+        """Update effect label to show validation status"""
+        effect_labels = [
             "Effect 1",
             "Effect 2",
             "Effect 3",
@@ -7343,76 +7343,79 @@ class ModifyRelicDialog:
             "Curse 3",
         ]
 
-        for i in range(3):
-            effect_idx = i
-            curse_idx = i + 3
+        label = effect_labels[slot_index]
+        try:
+            effect_id = int(self.effect_entries[slot_index].get())
+        except ValueError:
+            effect_id = 0
+        is_curse_slot = slot_index >= 3
 
-            try:
-                effect_id = int(self.effect_entries[effect_idx].get())
-                curse_id = int(self.effect_entries[curse_idx].get())
-            except ValueError:
-                effect_id = 0
-                curse_id = 0
-
-            base_effect_label = effect_labels_base[effect_idx]
-
-            # Check compatibility with other slots
-            for j in range(3):
-                if i == j:
+        # Check compatibility
+        conflict_id = self.game_data.effects[effect_id].conflict_id
+        if conflict_id != -1:
+            for slot_index2 in range(3) if not is_curse_slot else range(3, 6):
+                if slot_index == slot_index2:
                     continue
 
+                label2 = effect_labels[slot_index2]
                 try:
-                    effect_id2 = int(self.effect_entries[j].get())
+                    effect_id2 = int(self.effect_entries[slot_index2].get())
                 except ValueError:
                     effect_id2 = 0
-
-                conflict_id1 = self.game_data.effects[effect_id].conflict_id
                 conflict_id2 = self.game_data.effects[effect_id2].conflict_id
 
-                if conflict_id1 == -1 or conflict_id2 == -1:
+                if conflict_id2 == -1:
                     continue
 
-                if conflict_id1 == conflict_id2:
-                    self.slot_labels[effect_idx].config(
-                        text=f"⚠️ {base_effect_label} (Conflicts with Effect {j+1}):",
+                if conflict_id == conflict_id2:
+                    self.slot_labels[slot_index].config(
+                        text=f"⚠️ {label} (Conflicts with {label2}):",
                         style="illegal.TLabel",
                     )
-                    break
-            else:
-                self.slot_labels[effect_idx].config(
-                    text=f"{base_effect_label}:", style="TLabel"
-                )
+                    return
 
-            # Check if this effect needs a curse
-            needs_curse = False
-            has_curse = curse_id not in [0, -1, 4294967295]
+        # Check curse
+        if is_curse_slot:
+            related_slot_index = slot_index - 3
+            try:
+                related_effect_id = int(self.effect_entries[related_slot_index].get())
+            except ValueError:
+                related_effect_id = 0
 
-            if effect_id not in [0, -1, 4294967295]:
-                needs_curse = self.game_data.effect_needs_curse(effect_id)
+            needs_curse = self.game_data.effect_needs_curse(related_effect_id)
+            has_curse = effect_id not in (0, -1, 4294967295)
 
             # Update the curse slot label
-            base_curse_label = effect_labels_base[curse_idx]
             if needs_curse and not has_curse:
                 # Needs curse but doesn't have one - show warning
-                self.slot_labels[curse_idx].config(
-                    text=f"⚠️ {base_curse_label} (REQUIRED):", style="illegal.TLabel"
+                self.slot_labels[slot_index].config(
+                    text=f"⚠️ {label} (REQUIRED):", style="illegal.TLabel"
                 )
             elif needs_curse and has_curse:
                 # Needs curse and has one - show satisfied
-                self.slot_labels[curse_idx].config(
-                    text=f"✓ {base_curse_label}:", style="valid.TLabel"
+                self.slot_labels[slot_index].config(
+                    text=f"✓ {label}:", style="valid.TLabel"
                 )
             elif not needs_curse and has_curse:
                 # Doesn't need curse but has one - ILLEGAL
-                self.slot_labels[curse_idx].config(
-                    text=f"⛔ {base_curse_label} (ILLEGAL - remove curse):",
+                self.slot_labels[slot_index].config(
+                    text=f"⛔ {label} (ILLEGAL - remove curse):",
                     style="illegal.TLabel",
                 )
             else:
                 # Doesn't need curse and doesn't have one - correct
-                self.slot_labels[curse_idx].config(
-                    text=f"{base_curse_label} (not needed):", style="TLabel"
+                self.slot_labels[slot_index].config(
+                    text=f"{label} (not needed):", style="TLabel"
                 )
+            return
+
+        # Default no special indicator
+        self.slot_labels[slot_index].config(text=f"{label}:", style="TLabel")
+
+    def _update_effect_indicators(self):
+        """Update all effect indicators"""
+        for i in range(6):
+            self._update_effect_indicator(i)
 
     def search_items(self):
         """Open search dialog for items"""
