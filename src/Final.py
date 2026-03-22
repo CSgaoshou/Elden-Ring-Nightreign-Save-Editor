@@ -597,6 +597,7 @@ def save_file():
             import traceback
 
             traceback.print_exc()
+    return True
 
 
 def name_to_path():
@@ -6353,8 +6354,8 @@ class SaveEditorGUI:
 
     def save_changes(self):
         if globals.data and userdata_path:
-            save_file()
-            messagebox.showinfo("Success", "Changes saved to file")
+            if save_file():
+                messagebox.showinfo("Success", "Changes saved to file")
         else:
             messagebox.showwarning("Warning", "No character loaded")
 
