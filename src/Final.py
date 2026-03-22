@@ -2196,7 +2196,8 @@ class SaveEditorGUI:
         def open_new_preset_name_dialog():
             # Dialog to enter new preset name
             def check_regex(P):
-                if re.fullmatch(r"[a-zA-Z0-9 ]{0,18}", P):
+                # All printable ASCII (space to ~)
+                if re.fullmatch(r"[\x20-\x7E]{0,18}", P):
                     return True
                 return False
 
