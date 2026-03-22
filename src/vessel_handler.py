@@ -331,13 +331,15 @@ class VesselParser:
         while cursor < len(globals.data):
             p_start = cursor
             header = struct.unpack_from("<B", globals.data, cursor)[0]
-            if header != 0x01:
-                break
+            if header != 0x01:  # Removed preset
+                cursor += 80  # Skip the rest of this preset block
+                continue
 
             # Offsets for custom preset fields
             p_offsets = {
                 "base": p_start,
                 "hero_type": p_start + 1,
+                "unknown_1": p_start + 2,
                 "counter": p_start + 3,
                 "name": p_start + 4,
                 "vessel_id": p_start + 44,  # 4 + 36 + 4 padding
@@ -346,7 +348,7 @@ class VesselParser:
             }
 
             cursor += 1
-            h_id = int(struct.unpack_from("<H", globals.data, cursor)[0])
+            h_id = int(struct.unpack_from("<B", globals.data, cursor)[0])
             cursor += 2
             counter_val = struct.unpack_from("<B", globals.data, cursor)[0]
             cursor += 1
