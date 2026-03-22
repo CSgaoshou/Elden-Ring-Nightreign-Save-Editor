@@ -1099,6 +1099,7 @@ class ColorTheme:
                     "main_bg": "#ECECEC",  # Main window background
                     "card_bg": "#F8F9FA",  # Tab or Frame background
                     "input_bg": "#FFFFFF",  # Entry or Text background
+                    "insert_bg": "#000000",  # Insertion cursor color
                     "text_main": "#000000",  # Default text color
                     "text_second": "#888888",  # Secondary text color
                     "btn_bg": "#DDDDDD",  # Contrast for buttons
@@ -1171,6 +1172,7 @@ class ColorTheme:
                     "main_bg": "#0a0a20",  # Deep dark background
                     "card_bg": "#161b3d",  # Slightly lighter surface
                     "input_bg": "#1c224d",  # Contrast for inputs
+                    "insert_bg": "#ffffff",  # Insertion cursor color
                     "text_main": "#e0e0ff",  # Soft white text
                     "text_second": "#8b9bbd",  # Secondary text color
                     "btn_bg": "#373862",  # Contrast for buttons
@@ -1327,7 +1329,10 @@ class ColorTheme:
             lightcolor="white",
         )
         self._style.configure(
-            "TEntry", fieldbackground=base["input_bg"], foreground=base["text_main"]
+            "TEntry",
+            fieldbackground=base["input_bg"],
+            foreground=base["text_main"],
+            insertcolor=base["insert_bg"],
         )
         self._style.configure(
             "TRadiobutton", background=base["card_bg"], foreground=base["text_main"]
@@ -8395,6 +8400,7 @@ class RelicTypeSelector(tk.Toplevel):
             width=10,
             from_=1,
             to=999,
+            style="TEntry",
         )
         quantity_entry.pack(side=tk.LEFT)
 
