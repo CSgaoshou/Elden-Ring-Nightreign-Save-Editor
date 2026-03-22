@@ -5576,24 +5576,30 @@ class SaveEditorGUI:
             self.tree.heading("#0", text="")
 
     def show_context_menu(self, event):
-        # Select item under cursor
-        item = self.tree.identify_row(event.y)
-        if item:
-            self.tree.selection_set(item)
+        selections = self.tree.selection()
+        target_item = self.tree.identify_row(event.y)
+        if not target_item:
+            return
 
-            menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
-            menu.add_separator()
+        # Clear current selection if it does not include target item
+        if target_item not in selections:
+            self.tree.selection_set(target_item)
+            selections = (target_item,)
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
+        menu.add_separator()
+        if len(selections) == 1:
             menu.add_command(label="Modify", command=self.modify_selected_relic)
-            menu.add_command(
-                label="Delete",
-                foreground="red",
-                font=("Arial", 9, "bold"),
-                command=self.delete_selected_relic,
-            )
+        menu.add_command(
+            label="Delete",
+            foreground="red",
+            font=("Arial", 9, "bold"),
+            command=self.delete_selected_relic,
+        )
+        if len(selections) == 1:
             menu.add_separator()
             menu.add_command(label="📋 Copy Effects", command=self.copy_relic_effects)
-
             # Only enable paste if we have something in clipboard
             paste_label = "📋 Paste Effects"
             if self.clipboard_effects:
@@ -5603,19 +5609,19 @@ class SaveEditorGUI:
                 command=self.paste_relic_effects,
                 state="normal" if self.clipboard_effects else "disabled",
             )
-            menu.post(event.x_root, event.y_root)
+        menu.post(event.x_root, event.y_root)
 
     def toggle_favorite(self):
         """Toggle favorite status of selected relic"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
-            return
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        self.inventory_handler.toggle_favorite_mark(ga_handle)
-        self.refresh_inventory_and_vessels()
+
+        def task():
+            selections = self.tree.selection()
+            for item in selections:
+                tags = self.tree.item(item, "tags")
+                ga_handle = int(tags[0])
+                self.inventory_handler.toggle_favorite_mark(ga_handle)
+
+        self.run_task_async(task, callback=self.refresh_inventory_and_vessels)
 
     def copy_relic_effects(self):
         """Copy effects from selected relic to clipboard"""
@@ -5751,7 +5757,7 @@ class SaveEditorGUI:
 
         # Check if multiple items selected
         if len(selection) > 1:
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete {len(selection)} relics?",
             )
@@ -5759,42 +5765,56 @@ class SaveEditorGUI:
             item = selection[0]
             tags = self.tree.item(item, "tags")
             item_id = int(tags[1])
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete this relic (ID: {item_id})?",
             )
+        if not confirmed:
+            return
 
-        if result:
-            deleted_count = 0
-            failed_count = 0
+        stats = {
+            "success_count": 0,
+            "fail_count": 0,
+            "last_reason": "",
+        }
 
+        def task():
             for item in selection:
                 tags = self.tree.item(item, "tags")
                 ga_handle = int(tags[0])
-                item_id = int(tags[1])
-
                 try:
-                    del_result = self.inventory_handler.remove_relic_from_inventory(
-                        ga_handle
-                    )
+                    self.inventory_handler.remove_relic_from_inventory(ga_handle)
+                    stats["success_count"] += 1
                 except Exception as e:
-                    del_result = False
+                    stats["fail_count"] += 1
+                    stats["last_reason"] = str(e)
 
-                if del_result:
-                    deleted_count += 1
-                else:
-                    failed_count += 1
-
-            if deleted_count > 0:
-                messagebox.showinfo(
-                    "Success",
-                    f"Deleted {deleted_count} relic(s) successfully"
-                    + (f"\n{failed_count} failed" if failed_count > 0 else ""),
+        def complete():
+            success_count = stats["success_count"]
+            fail_count = stats["fail_count"]
+            last_reason = stats["last_reason"]
+            reason_string = f"\n{last_reason}." if fail_count == 1 else ""
+            if fail_count == 0:
+                msg_info("Success", f"Deleted {success_count} relic(s).")
+            elif success_count > 0:
+                messagebox.showwarning(
+                    "Warning",
+                    f"Deleted {success_count} relic(s) successfully."
+                    f"\n{fail_count} failed."
+                    f"{reason_string}",
                 )
+            else:
+                messagebox.showerror(
+                    "Error",
+                    f"Delete failed."
+                    f"{reason_string}",
+                )
+
+            if success_count>0:
                 self.refresh_inventory_lightly()
                 save_current_data()
-            else:
-                messagebox.showerror("Error", "Failed to delete relics")
+
+        self.run_task_async(task, callback=complete)
 
     def select_all_relics(self):
         """Select all relics in the tree"""
