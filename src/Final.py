@@ -385,7 +385,7 @@ def split_files(file_path, folder_name):
         shutil.rmtree(split_dir)  # delete folder and everything inside
     os.makedirs(split_dir, exist_ok=True)
 
-    if file_name.lower() == "memory.dat":
+    if MODE == "PS4":
         with open(file_path, "rb") as f:
             header = f.read(0x80)
             with open(os.path.join(split_dir, "header"), "wb") as out:
@@ -406,7 +406,7 @@ def split_files(file_path, folder_name):
                 with open(os.path.join(split_dir, "regulation"), "wb") as out:
                     out.write(regulation)
 
-    elif file_path.lower().endswith(".sl2"):
+    elif MODE == "PC":
         # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
         decrypt_ds2_sl2(file_path)
 
@@ -692,7 +692,7 @@ def split_files_import(file_path, folder_name):
                 with open(os.path.join(split_dir, "regulation"), "wb") as out:
                     out.write(regulation)
 
-    elif file_path.lower().endswith(".sl2"):
+    elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
         # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
         IMPORT_MODE = "PC"
         decrypt_ds2_sl2_import(file_path)
@@ -4922,7 +4922,7 @@ class SaveEditorGUI:
         # This allows custom save file names (e.g., from ModEngine 3 Manager)
         if file_name.lower() == "memory.dat":
             MODE = "PS4"
-        elif file_path.lower().endswith(".sl2"):
+        elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
             # Check if it's a valid SL2 file by looking for BND4 header
             try:
                 with open(file_path, "rb") as f:
