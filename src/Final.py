@@ -6113,73 +6113,54 @@ class SaveEditorGUI:
                 "Warning", "No save file loaded. Please open a save file first."
             )
             return
-        
-        # 弹出数量输入对话框
-        count_str = simpledialog.askinteger(
-            "Add Relics",
-            "Enter number of relics to add (1-1000):",
-            minvalue=1,
-            maxvalue=1000,
-            initialvalue=1
-        )
-        
-        if count_str is None:
-            return
-        
-        count = count_str
-        
+
         relic_type_selector = RelicTypeSelector(self.root)
         if not relic_type_selector.result:
             return
-        
-        try:
-            if count == 1:
-                # 原有的单个添加逻辑
-                added_result, new_ga = self.inventory_handler.add_relic_to_inventory(
-                    relic_type=relic_type_selector.result
-                )
-                if added_result:
-                    msg_info("Success", "Dummy relic added. Refreshing inventory.")
-                    self.refresh_inventory_and_vessels()
-                    # Find Added item by new_ga
-                    for item in self.tree.get_children():
-                        item_ga = int(self.tree.item(item, "tags")[0])
-                        if item_ga == new_ga:
-                            self.tree.selection_set(item)
-                            self.tree.focus(item)
-                            self.tree.see(item)
-                            break
-                    self.modify_selected_relic()
-            else:
-                # 批量添加逻辑
-                added_count = 0
-                last_ga = None
-                for _ in range(count):
-                    added_result, new_ga = self.inventory_handler.add_relic_to_inventory(
-                        relic_type=relic_type_selector.result
+        count = relic_type_selector.count
+        stats = {
+            "success_count": 0,
+            "error": False,
+            "reason": "",
+            "last_ga": -1,
+        }
+
+        def task():
+            for _ in range(count):
+                try:
+                    _, new_ga = self.inventory_handler.add_relic_to_inventory(
+                        relic_type_selector.result
                     )
-                    if added_result:
-                        added_count += 1
-                        last_ga = new_ga
-                    else:
-                        break
-                
-                if added_count > 0:
-                    msg_info("Success", f"{added_count} dummy relic(s) added. Refreshing inventory.")
-                    self.refresh_inventory_and_vessels()
-                    if last_ga is not None:
-                        for item in self.tree.get_children():
-                            item_ga = int(self.tree.item(item, "tags")[0])
-                            if item_ga == last_ga:
-                                self.tree.selection_set(item)
-                                self.tree.focus(item)
-                                self.tree.see(item)
-                                break
-                        self.modify_selected_relic()
-                else:
-                    messagebox.showerror("Error", "Failed to add any relics.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add relic(s): {e}")
+                    stats["success_count"] += 1
+                    stats["last_ga"] = new_ga
+                except Exception as e:
+                    stats["error"] = True
+                    stats["reason"] = str(e)
+                    break
+
+        def complete():
+            self.refresh_inventory_and_vessels()
+
+            if stats["error"]:
+                messagebox.showerror(
+                    "Error",
+                    f"An error occurred while adding relic #{stats['success_count']+1}"
+                    f"\n{stats['reason']}",
+                )
+                return
+            msg_info("Success", f"{stats['success_count']} dummy relic(s) added.")
+
+            # Find the added item by last_ga
+            for item in self.tree.get_children():
+                item_ga = int(self.tree.item(item, "tags")[0])
+                if item_ga == stats["last_ga"]:
+                    self.tree.selection_set(item)
+                    self.tree.focus(item)
+                    self.tree.see(item)
+                    break
+            self.modify_selected_relic()
+
+        self.run_task_async(task, callback=complete)
 
     def _find_valid_relic_id_for_effects(self, current_id, effects):
         """Find a valid relic ID that can have the given effects (must be same color)"""
@@ -8362,15 +8343,12 @@ class SearchDialog:
         self.dialog.destroy()
 
 
-import tkinter as tk
-from tkinter import ttk
-
-
 class RelicTypeSelector(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Select Relic Type")
         self.result = None
+        self.count = 1
 
         self.resizable(False, False)
 
@@ -8382,6 +8360,36 @@ class RelicTypeSelector(tk.Toplevel):
             text="Select relic type to create.\nNote: Type cannot be changed later.",
             justify=tk.CENTER,
         ).pack(pady=10)
+
+        quantity_frame = ttk.Frame(main_frame)
+        quantity_frame.pack(pady=(0, 10))
+
+        ttk.Label(
+            quantity_frame,
+            text="Quantity:",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.quantity_var = tk.StringVar(value=str(self.count))
+        quantity_entry = ttk.Spinbox(
+            quantity_frame,
+            textvariable=self.quantity_var,
+            width=10,
+            from_=1,
+            to=999,
+        )
+        quantity_entry.pack(side=tk.LEFT)
+
+        def on_validate_input(val: str):
+            if val == "":
+                return True
+            try:
+                count = int(val)
+            except ValueError:
+                return False
+            return 1 <= count <= 999
+
+        vcmd = (self.register(on_validate_input), "%P")
+        quantity_entry.config(validate="key", validatecommand=vcmd)
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(pady=5)
@@ -8406,6 +8414,9 @@ class RelicTypeSelector(tk.Toplevel):
 
         self.center_window(parent)
         self.focus_force()
+        quantity_entry.focus_set()
+        quantity_entry.select_range(0, tk.END)
+        quantity_entry.icursor(tk.END)
 
         self.transient(parent)
         self.grab_set()
@@ -8428,6 +8439,13 @@ class RelicTypeSelector(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
 
     def set_result(self, value):
+        try:
+            quantity = int(self.quantity_var.get())
+            if quantity < 1:
+                quantity = 1
+        except ValueError:
+            quantity = 1
+        self.count = quantity
         self.result = value
         self.destroy()
 
