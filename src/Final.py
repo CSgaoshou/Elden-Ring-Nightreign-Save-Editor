@@ -2239,6 +2239,23 @@ class SaveEditorGUI:
             lang_mgr.register(cancel_button, N_("Cancel"))
             cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
 
+            dialog.withdraw()  # Hide initially to avoid flicker in wrong position
+            dialog.update_idletasks()  # Ensure geometry is calculated before positioning
+
+            parent_x = self.root.winfo_x()
+            parent_y = self.root.winfo_y()
+            parent_w = self.root.winfo_width()
+            parent_h = self.root.winfo_height()
+
+            dialog_w = dialog.winfo_width()
+            dialog_h = dialog.winfo_height()
+
+            x = parent_x + (parent_w - dialog_w) // 2
+            y = parent_y + (parent_h - dialog_h) // 2
+
+            dialog.geometry(f"+{x}+{y}")
+            dialog.deiconify() 
+
             self.root.wait_window(dialog)
             return result["name"]
 
