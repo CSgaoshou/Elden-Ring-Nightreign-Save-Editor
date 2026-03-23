@@ -377,7 +377,6 @@ RELIC_COLOR_HEX = {
 
 
 def split_files(file_path, folder_name):
-    backup_save(file_path)
     file_name = os.path.basename(file_path)
     split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
     # clean current dir
@@ -422,6 +421,7 @@ def save_file():
         if not output_sl2_file:
             return
 
+        backup_save(output_sl2_file)
         encrypt_modified_files(output_sl2_file)
 
     if MODE == "PS4":  ### HERE
@@ -456,6 +456,7 @@ def save_file():
 
             if not output_file:
                 return
+            backup_save(output_file)
 
             # Track total bytes written for validation
             total_bytes_written = 0
