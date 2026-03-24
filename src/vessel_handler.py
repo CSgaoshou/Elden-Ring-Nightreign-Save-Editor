@@ -1,16 +1,16 @@
-import datetime
-import os
-import struct
-import re
-from copy import deepcopy
-import orjson
 import logging
-from source_data_handler import SourceDataHandler
-from relic_checker import RelicChecker
-from inventory_handler import InventoryHandler, ItemEntry
-import globals
-from globals import ITEM_TYPE_RELIC, COLOR_MAP, get_now_timestamp, UNIQUENESS_IDS
+import re
+import struct
+from copy import deepcopy
+from typing import TypedDict
 
+import orjson
+
+import globals
+from globals import COLOR_MAP, ITEM_TYPE_RELIC, UNIQUENESS_IDS, get_now_timestamp
+from inventory_handler import InventoryHandler, ItemEntry
+from relic_checker import RelicChecker
+from source_data_handler import SourceDataHandler
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,17 @@ def is_vessel_available(vessel_id: int):
         return False
 
 
+class Preset(TypedDict):
+    hero_type: int
+    index: int
+    name: str
+    vessel_id: int
+    relics: list[int]
+    offset: dict[str, int]
+    counter: int
+    timestamp: int
+
+
 class HeroLoadout:
     def __init__(self, hero_type, cur_preset_idx, cur_vessel_id, vessels, offsets):
         self.hero_type = hero_type
@@ -33,7 +44,7 @@ class HeroLoadout:
         # vessel list[dict]， keys: vessel_id, relics, offsets:dict
         #   offsets store offests for vessel_id and relics, keys: vessel_id, relics
         self.vessels = vessels
-        self.presets = []
+        self.presets: list[Preset] = []
         # Stores offsets for hero-level fields
         self.offsets = offsets
 
@@ -602,7 +613,7 @@ class LoadoutHandler:
         self.parser = VesselParser()
         self.modifier = VesselModifier()
         self.validator = Validator()
-        self.all_presets = []
+        self.all_presets: list[Preset] = []
 
     @property
     def heroes(self):
