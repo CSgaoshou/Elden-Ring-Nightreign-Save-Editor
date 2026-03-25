@@ -422,6 +422,7 @@ def save_file():
             return
 
         backup_save(output_sl2_file)
+        ConfigManager().last_file = output_sl2_file
         encrypt_modified_files(output_sl2_file)
 
     if MODE == "PS4":  ### HERE
@@ -457,6 +458,7 @@ def save_file():
             if not output_file:
                 return
             backup_save(output_file)
+            ConfigManager().last_file = output_file
 
             # Track total bytes written for validation
             total_bytes_written = 0
