@@ -248,3 +248,7 @@ msgstr "取消全选"
 #, python-brace-format
 msgid "{selected_count} selected"
 msgstr "已选{selected_count}项"
+
+#: Final.py:2785
+msgid "❌ Delete Preset"
+msgstr "❌ 删除"

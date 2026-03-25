@@ -2199,75 +2199,10 @@ class SaveEditorGUI:
 
         # Create 11 vessel slot displays (1 column layout)
         # Vessel names will be updated dynamically based on selected character
-        def open_new_preset_name_dialog():
-            # Dialog to enter new preset name
-            def check_regex(P):
-                # All printable ASCII (space to ~)
-                if re.fullmatch(r"[\x20-\x7E]{0,18}", P):
-                    return True
-                return False
-
-            vcmd = self.root.register(check_regex)
-            dialog = tk.Toplevel(self.root)
-            self.color_theme.apply(dialog)
-            dialog.title("New Preset Name")
-            lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
-            dialog.transient(self.root)
-            dialog.grab_set()
-
-            label = ttk.Label(dialog, text="Enter name for new preset:", style="Main.TLabel")
-            lang_mgr.register(label, N_("Enter name for new preset:"))
-            label.pack(pady=10, padx=10)
-
-            name_entry = ttk.Entry(
-                dialog, validate="key", validatecommand=(vcmd, "%P"), width=30
-            )
-            name_entry.pack(pady=5, padx=10)
-            name_entry.focus_set()
-
-            result = {"name": None}  # Use a dict to pass value back
-
-            def on_ok():
-                result["name"] = name_entry.get().strip()
-                if result["name"] is None or result["name"].strip() == "":
-                    messagebox.showerror("Error", _("Preset name cannot be empty"))
-                    return
-                dialog.destroy()
-
-            def on_cancel():
-                dialog.destroy()
-
-            ok_button = ttk.Button(dialog, text="OK", command=on_ok)
-            lang_mgr.register(ok_button, N_("OK"))
-            ok_button.pack(side=tk.LEFT, padx=5, pady=10)
-
-            cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
-            lang_mgr.register(cancel_button, N_("Cancel"))
-            cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
-
-            dialog.withdraw()  # Hide initially to avoid flicker in wrong position
-            dialog.update_idletasks()  # Ensure geometry is calculated before positioning
-
-            parent_x = self.root.winfo_x()
-            parent_y = self.root.winfo_y()
-            parent_w = self.root.winfo_width()
-            parent_h = self.root.winfo_height()
-
-            dialog_w = dialog.winfo_width()
-            dialog_h = dialog.winfo_height()
-
-            x = parent_x + (parent_w - dialog_w) // 2
-            y = parent_y + (parent_h - dialog_h) // 2
-
-            dialog.geometry(f"+{x}+{y}")
-            dialog.deiconify() 
-
-            self.root.wait_window(dialog)
-            return result["name"]
 
         def on_add_to_preset(vessel_slot):
             hero_type = self.vessel_char_combo.current() + 1
-            preset_name = open_new_preset_name_dialog()
+            preset_name = self.ask_preset_name()
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
@@ -2841,6 +2776,14 @@ class SaveEditorGUI:
             )
             lang_mgr.register(edit_btn, N_("✏️ Edit Preset"))
             edit_btn.pack(side="right", padx=5)
+            delete_btn = ttk.Button(
+                btn_frame,
+                text="❌ Delete Preset",
+                command=lambda pd=preset_data: self.delete_preset(pd),
+                style="Danger.TButton",
+            )
+            lang_mgr.register(delete_btn, N_("❌ Delete Preset"))
+            delete_btn.pack(side="right", padx=5)
 
             # Toggle function for collapse/expand
             def make_toggle(cf, cv):
@@ -2878,6 +2821,81 @@ class SaveEditorGUI:
             lang_mgr.register(no_presets, N_("No saved presets for this character"))
             no_presets.pack(pady=20)
             bind_scroll_recursive(no_presets)
+
+    def ask_preset_name(self, master: tk.Misc | None = None, initial=""):
+        """Open a dialog to ask the user for a preset name"""
+
+        def check_regex(P):
+            # All printable ASCII (space to ~)
+            if re.fullmatch(r"[\x20-\x7E]{0,18}", P):
+                return True
+            return False
+
+        master = master or self.root
+        vcmd = self.root.register(check_regex)
+        dialog = tk.Toplevel(self.root)
+        self.color_theme.apply(dialog)
+        dialog.title("New Preset Name")
+        lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        label = ttk.Label(
+            dialog, text="Enter name for new preset:", style="Main.TLabel"
+        )
+        lang_mgr.register(label, N_("Enter name for new preset:"))
+        label.pack(pady=10, padx=10)
+
+        name_var = tk.StringVar(value=initial)
+        name_entry = ttk.Entry(
+            dialog,
+            validate="key",
+            validatecommand=(vcmd, "%P"),
+            width=30,
+            textvariable=name_var,
+        )
+        name_entry.pack(pady=5, padx=10)
+        name_entry.focus_set()
+
+        result: dict[str, str] = {"name": ""}  # Use a dict to pass value back
+
+        def on_ok():
+            result["name"] = name_entry.get().strip()
+            if len(result["name"]) == 0:
+                messagebox.showerror("Error", _("Preset name cannot be empty"))
+                return
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        ok_button = ttk.Button(dialog, text="OK", command=on_ok)
+        lang_mgr.register(ok_button, N_("OK"))
+        ok_button.pack(side=tk.LEFT, padx=5, pady=10)
+
+        cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
+        lang_mgr.register(cancel_button, N_("Cancel"))
+        cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
+
+        dialog.withdraw()  # Hide initially to avoid flicker in wrong position
+        dialog.update_idletasks()  # Ensure geometry is calculated before positioning
+
+        parent_x = master.winfo_x()
+        parent_y = master.winfo_y()
+        parent_w = master.winfo_width()
+        parent_h = master.winfo_height()
+
+        dialog_w = dialog.winfo_width()
+        dialog_h = dialog.winfo_height()
+
+        x = parent_x + (parent_w - dialog_w) // 2
+        y = parent_y + (parent_h - dialog_h) // 2
+
+        dialog.geometry(f"+{x}+{y}")
+        dialog.deiconify()
+
+        self.root.wait_window(dialog)
+        return result["name"] if len(result["name"]) > 0 else None
 
     def edit_preset_relics(self, preset_info):
         """Open dialog to edit relics in a preset"""
@@ -2945,7 +2963,20 @@ class SaveEditorGUI:
         left_panel.pack(side="left", fill="y", padx=10, pady=10)
         left_panel.pack_propagate(False)
 
+        def update_parent_with_grab():
+            self.refresh_presets()
+            if dialog.winfo_exists():
+                dialog.grab_set()
+
         # Header
+        def on_header_click(_):
+            new_name = self.ask_preset_name(dialog, preset["name"])
+            if not new_name:
+                return
+            self.loadout_handler.rename_preset(preset["index"], new_name)
+            header.config(text=f"{char_name} - {new_name}")
+            update_parent_with_grab()
+
         header = tk.Label(
             left_panel,
             text=f"{char_name} - {preset_name}",
@@ -2954,6 +2985,7 @@ class SaveEditorGUI:
             bg=BG_DARK,
         )
         header.pack(anchor="w", pady=(0, 10))
+        header.bind("<Button-1>", on_header_click)
 
         vessel_info = get_vessel_info(char_name, vessel_slot)
         vessel_name = vessel_info.get("name", f"Vessel {vessel_slot}")
@@ -3192,7 +3224,7 @@ class SaveEditorGUI:
                 slot_relic_data[idx] = None
                 update_slot_display()
                 update_details_panel()
-                self.refresh_presets()
+                update_parent_with_grab()
             except Exception as e:
                 messagebox.showerror(
                     "Error", f"Failed to clear relic from preset:\n{e}"
@@ -3215,19 +3247,19 @@ class SaveEditorGUI:
             real_id = relic_data.get("real_id", 0)
 
             # Release grab so we can interact with the edit dialog
-            dialog.grab_release()
+            # dialog.grab_release()
 
             def refresh_after_edit():
                 # Refresh main inventory (this updates ga_relic)
                 self.refresh_inventory_lightly()
                 # Rebuild relic info from updated ga_relic
-                for ga in self.inventory_handler.relic_gas:
-                    relic = self.inventory_handler.relics[ga]
+                for _ga in self.inventory_handler.relic_gas:
+                    relic = self.inventory_handler.relics[_ga]
                     real_id = relic.state.real_item_id
                     item_info = self.game_data.relics.get(real_id)
                     effects = relic.state.effects_and_curses[:3]
                     curses = relic.state.effects_and_curses[3:]
-                    ga_to_full_info[ga] = {
+                    ga_to_full_info[_ga] = {
                         "name": item_info.name if item_info else f"ID:{real_id}",
                         "color": item_info.color if item_info else "Unknown",
                         "real_id": real_id,
@@ -3240,26 +3272,17 @@ class SaveEditorGUI:
                     slot_relic_data[idx] = new_relic_data
                     update_slot_display()
                     update_details_panel()
-
-            def on_edit_dialog_close():
-                # Restore grab when edit dialog closes
-                if dialog.winfo_exists():
-                    dialog.grab_set()
+                update_parent_with_grab()
 
             # Open or reuse modify dialog
             if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
                 self.modify_dialog = ModifyRelicDialog(
-                    self.root, ga, real_id, refresh_after_edit
+                    dialog, ga, real_id, refresh_after_edit
                 )
             else:
                 self.modify_dialog.load_relic(ga, real_id)
                 self.modify_dialog.callback = refresh_after_edit
 
-            # Set up close protocol and bring to front
-            self.modify_dialog.dialog.protocol(
-                "WM_DELETE_WINDOW",
-                lambda: [self.modify_dialog.dialog.destroy(), on_edit_dialog_close()],
-            )
             self.modify_dialog.dialog.lift()
             self.modify_dialog.dialog.focus_force()
 
@@ -3550,7 +3573,7 @@ class SaveEditorGUI:
                 update_slot_display()
                 update_details_panel()
                 populate_relic_list()  # Refresh list (color filter may change)
-                self.refresh_presets()
+                update_parent_with_grab()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to assign preset relic:\n{e}")
 
@@ -3597,6 +3620,20 @@ class SaveEditorGUI:
         update_slot_display()
         update_details_panel()
         populate_relic_list()
+
+    def delete_preset(self, preset_info):
+        """Delete a preset after confirmation"""
+        preset = preset_info["preset"]
+        if not messagebox.askyesno(
+            "Delete Preset",
+            f"Are you sure to delete preset '{preset['name']}'?",
+        ):
+            return
+        try:
+            self.loadout_handler.remove_preset(preset["index"])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete preset:\n{e}")
+        self.refresh_vessels()
 
     def write_preset_relic(self, preset_offset, slot_idx, new_ga_handle):
         """Write a relic GA handle to a preset slot in the save file"""

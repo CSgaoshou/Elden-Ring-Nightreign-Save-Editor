@@ -253,3 +253,7 @@ msgstr "已選擇{selected_count}個"
 
 #~ msgid "Reduce Message Pop"
 #~ msgstr "減少訊息彈出"
+
+#: Final.py:2785
+msgid "❌ Delete Preset"
+msgstr "❌ 刪除"
