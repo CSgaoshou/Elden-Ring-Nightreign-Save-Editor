@@ -1,6 +1,5 @@
-Source code/Finalctk.py
-Source code/.vscode/*
-Source code/settings.json
+# IDE files
+.vscode/
 
 # Debug files
 debug*.txt
@@ -13,8 +12,13 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Build files
+/build/
+/dist/
+
 # Decrypted save files
 src/decrypted_output/
+src/decrypted_output_import/
 
 # Dev/test scripts
 src/analyze_presets.py

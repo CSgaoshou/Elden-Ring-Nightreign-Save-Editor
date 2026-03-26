@@ -34,19 +34,24 @@ jobs:
             spec: src/build_mac.spec
             artifact: Elden_Ring_Save_Editor_MAC-Silicon
           - name: macOS Intel
-            os: macos-13
+            os: macos-15-intel
             python-architecture: 'x64'
             spec: src/build_mac.spec
             artifact: Elden_Ring_Save_Editor_MAC-Intel
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.14'
           architecture: ${{ matrix.python-architecture }}
+      - name: Setup MSVC for Win32
+        if: matrix.name == 'Windows 32-bit'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
       - name: Install Dependencies
         run: pip install cryptography pyinstaller openpyxl orjson pandas lxml pillow
       - name: Build Executable
@@ -58,7 +63,7 @@ jobs:
         run: |
           cd dist && zip -r ${{ matrix.artifact }}.zip *.app && mv ${{ matrix.artifact }}.zip ../
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact-path || format('{0}.zip', matrix.artifact) }}

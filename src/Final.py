@@ -16,43 +16,43 @@ TODO:
     Switchable message settings
 """
 
-from main_file import decrypt_ds2_sl2, encrypt_modified_files
-from main_file_import import decrypt_ds2_sl2_import
-import json, shutil, os, struct
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-from pathlib import Path
-
 # openpyxl is lazy-loaded in export/import functions to speed up startup
-from typing import Optional, Any, List, Dict, Union
+import inspect
+import json
+import logging
+import os
+import re
+import shutil
+import struct
 import sys
 import threading
-import re
-import logging
-import inspect
+import tkinter as tk
 import zipfile
 from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
 from PIL import Image, ImageTk
 
 # project modules
-from log_config import setup_logging
-from basic_class import Item
 import globals
-from globals import (
-    ITEM_TYPE_RELIC,
-    ITEM_TYPE_GOODS,
-    WORKING_DIR,
-    COLOR_MAP,
-    UNIQUENESS_IDS,
-    ICONS_DIR,
-)
-
-from relic_checker import RelicChecker, InvalidReason, is_curse_invalid
+from basic_class import Item
+from config_manager import ConfigManager
+from globals import (COLOR_MAP, ICONS_DIR, ITEM_TYPE_GOODS, ITEM_TYPE_RELIC,
+                     UNIQUENESS_IDS, WORKING_DIR)
+from inventory_handler import InventoryHandler
+from language_manager import N_, lang_mgr
+from log_config import setup_logging
+from main_file import decrypt_ds2_sl2, encrypt_modified_files
+from main_file_import import decrypt_ds2_sl2_import
+from relic_checker import InvalidReason, RelicChecker, is_curse_invalid
 from source_data_handler import SourceDataHandler, get_system_language
 from vessel_handler import LoadoutHandler, is_vessel_available
-from inventory_handler import InventoryHandler
-from config_manager import ConfigManager
-from language_manager import lang_mgr, N_
+
+# Forward declaration for IDE/Linter support
+if TYPE_CHECKING:
+    def _(message: str) -> str: ...
 
 
 def get_base_dir():
@@ -377,7 +377,6 @@ RELIC_COLOR_HEX = {
 
 
 def split_files(file_path, folder_name):
-    backup_save(file_path)
     file_name = os.path.basename(file_path)
     split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
     # clean current dir
@@ -385,7 +384,7 @@ def split_files(file_path, folder_name):
         shutil.rmtree(split_dir)  # delete folder and everything inside
     os.makedirs(split_dir, exist_ok=True)
 
-    if file_name.lower() == "memory.dat":
+    if MODE == "PS4":
         with open(file_path, "rb") as f:
             header = f.read(0x80)
             with open(os.path.join(split_dir, "header"), "wb") as out:
@@ -406,7 +405,7 @@ def split_files(file_path, folder_name):
                 with open(os.path.join(split_dir, "regulation"), "wb") as out:
                     out.write(regulation)
 
-    elif file_path.lower().endswith(".sl2"):
+    elif MODE == "PC":
         # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
         decrypt_ds2_sl2(file_path)
 
@@ -422,6 +421,8 @@ def save_file():
         if not output_sl2_file:
             return
 
+        backup_save(output_sl2_file)
+        ConfigManager().last_file = output_sl2_file
         encrypt_modified_files(output_sl2_file)
 
     if MODE == "PS4":  ### HERE
@@ -456,6 +457,8 @@ def save_file():
 
             if not output_file:
                 return
+            backup_save(output_file)
+            ConfigManager().last_file = output_file
 
             # Track total bytes written for validation
             total_bytes_written = 0
@@ -597,6 +600,7 @@ def save_file():
             import traceback
 
             traceback.print_exc()
+    return True
 
 
 def name_to_path():
@@ -692,7 +696,7 @@ def split_files_import(file_path, folder_name):
                 with open(os.path.join(split_dir, "regulation"), "wb") as out:
                     out.write(regulation)
 
-    elif file_path.lower().endswith(".sl2"):
+    elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
         # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
         IMPORT_MODE = "PC"
         decrypt_ds2_sl2_import(file_path)
@@ -1098,6 +1102,7 @@ class ColorTheme:
                     "main_bg": "#ECECEC",  # Main window background
                     "card_bg": "#F8F9FA",  # Tab or Frame background
                     "input_bg": "#FFFFFF",  # Entry or Text background
+                    "insert_bg": "#000000",  # Insertion cursor color
                     "text_main": "#000000",  # Default text color
                     "text_second": "#888888",  # Secondary text color
                     "btn_bg": "#DDDDDD",  # Contrast for buttons
@@ -1170,6 +1175,7 @@ class ColorTheme:
                     "main_bg": "#0a0a20",  # Deep dark background
                     "card_bg": "#161b3d",  # Slightly lighter surface
                     "input_bg": "#1c224d",  # Contrast for inputs
+                    "insert_bg": "#ffffff",  # Insertion cursor color
                     "text_main": "#e0e0ff",  # Soft white text
                     "text_second": "#8b9bbd",  # Secondary text color
                     "btn_bg": "#373862",  # Contrast for buttons
@@ -1326,7 +1332,10 @@ class ColorTheme:
             lightcolor="white",
         )
         self._style.configure(
-            "TEntry", fieldbackground=base["input_bg"], foreground=base["text_main"]
+            "TEntry",
+            fieldbackground=base["input_bg"],
+            foreground=base["text_main"],
+            insertcolor=base["insert_bg"],
         )
         self._style.configure(
             "TRadiobutton", background=base["card_bg"], foreground=base["text_main"]
@@ -1425,6 +1434,9 @@ class ColorTheme:
         )
         self._style.configure(
             "illegal.TLabel", foreground=status["illegal"], font=("Arial", 10, "bold")
+        )
+        self._style.configure(
+            "valid.TLabel", foreground=status["valid"], font=("Arial", 10, "bold")
         )
         self._style.configure(
             "MissingCurse.TLabel",
@@ -1749,6 +1761,7 @@ class SaveEditorGUI:
         label_text="Please wait...",
         callback=None,
         progress_bar=None,
+        delay_ms=500,
     ):
         """
         A universal async wrapper to run heavy tasks without freezing the GUI.
@@ -1759,10 +1772,15 @@ class SaveEditorGUI:
         :param label_text: Message displayed in the loading popup.
         :param callback: A function to run in the main thread after task_func finishes successfully.
         :param progress_bar: If True, shows a determinate progress bar; otherwise indeterminate.
+        :param delay_ms: Show the loading popup after delay. Useful to reduce flickering for quick tasks.
         :type progress_bar: bool
         """
         # 1. Create a top-level loading window
         loading_win = tk.Toplevel(self.root)
+
+        # Hide the window initial
+        loading_win.withdraw() 
+
         loading_win.config(bg=self.color_theme.base["card_bg"])
         loading_win.title(title)
         loading_win.geometry("350x150")
@@ -1778,12 +1796,12 @@ class SaveEditorGUI:
         x = (
             self.root.winfo_x()
             + (self.root.winfo_width() // 2)
-            - (loading_win.winfo_width() // 2)
+            - (loading_win.winfo_reqwidth() // 2) # use reqwidth since window is hiding
         )
         y = (
             self.root.winfo_y()
             + (self.root.winfo_height() // 2)
-            - (loading_win.winfo_height() // 2)
+            - (loading_win.winfo_reqheight() // 2)
         )
         loading_win.geometry(f"+{x}+{y}")
 
@@ -1804,6 +1822,15 @@ class SaveEditorGUI:
 
         # Lock main GUI
         loading_win.grab_set()
+
+        task_status = {"finished": False}
+
+        def show_loading_window():
+            if not task_status["finished"] and loading_win.winfo_exists():
+                loading_win.deiconify()
+
+        # Show the window after delay
+        delay_timer_id = self.root.after(delay_ms, show_loading_window)
 
         def _ui_update(value, new_text):
             # Check if window still exists before updating
@@ -1835,6 +1862,9 @@ class SaveEditorGUI:
                 self.root.after(0, lambda: finish_task(False, err_msg))
 
         def finish_task(success, err_msg=None):
+            task_status["finished"] = True
+            self.root.after_cancel(delay_timer_id) 
+
             if loading_win.winfo_exists():
                 loading_win.grab_release()
                 loading_win.destroy()
@@ -2171,57 +2201,10 @@ class SaveEditorGUI:
 
         # Create 11 vessel slot displays (1 column layout)
         # Vessel names will be updated dynamically based on selected character
-        def open_new_preset_name_dialog():
-            # Dialog to enter new preset name
-            def check_regex(P):
-                if re.fullmatch(r"[a-zA-Z0-9 ]{0,18}", P):
-                    return True
-                return False
-
-            vcmd = self.root.register(check_regex)
-            dialog = tk.Toplevel(self.root)
-            self.color_theme.apply(dialog)
-            dialog.title("New Preset Name")
-            lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
-            dialog.transient(self.root)
-            dialog.grab_set()
-
-            label = ttk.Label(dialog, text="Enter name for new preset:", style="Main.TLabel")
-            lang_mgr.register(label, N_("Enter name for new preset:"))
-            label.pack(pady=10, padx=10)
-
-            name_entry = ttk.Entry(
-                dialog, validate="key", validatecommand=(vcmd, "%P"), width=30
-            )
-            name_entry.pack(pady=5, padx=10)
-            name_entry.focus_set()
-
-            result = {"name": None}  # Use a dict to pass value back
-
-            def on_ok():
-                result["name"] = name_entry.get().strip()
-                if result["name"] is None or result["name"].strip() == "":
-                    messagebox.showerror("Error", _("Preset name cannot be empty"))
-                    return
-                dialog.destroy()
-
-            def on_cancel():
-                dialog.destroy()
-
-            ok_button = ttk.Button(dialog, text="OK", command=on_ok)
-            lang_mgr.register(ok_button, N_("OK"))
-            ok_button.pack(side=tk.LEFT, padx=5, pady=10)
-
-            cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
-            lang_mgr.register(cancel_button, N_("Cancel"))
-            cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
-
-            self.root.wait_window(dialog)
-            return result["name"]
 
         def on_add_to_preset(vessel_slot):
             hero_type = self.vessel_char_combo.current() + 1
-            preset_name = open_new_preset_name_dialog()
+            preset_name = self.ask_preset_name()
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
@@ -2795,6 +2778,14 @@ class SaveEditorGUI:
             )
             lang_mgr.register(edit_btn, N_("✏️ Edit Preset"))
             edit_btn.pack(side="right", padx=5)
+            delete_btn = ttk.Button(
+                btn_frame,
+                text="❌ Delete Preset",
+                command=lambda pd=preset_data: self.delete_preset(pd),
+                style="Danger.TButton",
+            )
+            lang_mgr.register(delete_btn, N_("❌ Delete Preset"))
+            delete_btn.pack(side="right", padx=5)
 
             # Toggle function for collapse/expand
             def make_toggle(cf, cv):
@@ -2832,6 +2823,81 @@ class SaveEditorGUI:
             lang_mgr.register(no_presets, N_("No saved presets for this character"))
             no_presets.pack(pady=20)
             bind_scroll_recursive(no_presets)
+
+    def ask_preset_name(self, master: tk.Misc | None = None, initial=""):
+        """Open a dialog to ask the user for a preset name"""
+
+        def check_regex(P):
+            # All printable ASCII (space to ~)
+            if re.fullmatch(r"[\x20-\x7E]{0,18}", P):
+                return True
+            return False
+
+        master = master or self.root
+        vcmd = master.register(check_regex)
+        dialog = tk.Toplevel(master)
+        self.color_theme.apply(dialog)
+        dialog.title("New Preset Name")
+        lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
+        dialog.transient(master)
+        dialog.grab_set()
+
+        label = ttk.Label(
+            dialog, text="Enter name for new preset:", style="Main.TLabel"
+        )
+        lang_mgr.register(label, N_("Enter name for new preset:"))
+        label.pack(pady=10, padx=10)
+
+        name_var = tk.StringVar(value=initial)
+        name_entry = ttk.Entry(
+            dialog,
+            validate="key",
+            validatecommand=(vcmd, "%P"),
+            width=30,
+            textvariable=name_var,
+        )
+        name_entry.pack(pady=5, padx=10)
+        name_entry.focus_set()
+
+        result = {"name": ""}  # Use a dict to pass value back
+
+        def on_ok():
+            result["name"] = name_entry.get().strip()
+            if len(result["name"]) == 0:
+                messagebox.showerror("Error", _("Preset name cannot be empty"))
+                return
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        ok_button = ttk.Button(dialog, text="OK", command=on_ok)
+        lang_mgr.register(ok_button, N_("OK"))
+        ok_button.pack(side=tk.LEFT, padx=5, pady=10)
+
+        cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
+        lang_mgr.register(cancel_button, N_("Cancel"))
+        cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
+
+        dialog.withdraw()  # Hide initially to avoid flicker in wrong position
+        dialog.update_idletasks()  # Ensure geometry is calculated before positioning
+
+        parent_x = master.winfo_x()
+        parent_y = master.winfo_y()
+        parent_w = master.winfo_width()
+        parent_h = master.winfo_height()
+
+        dialog_w = dialog.winfo_width()
+        dialog_h = dialog.winfo_height()
+
+        x = parent_x + (parent_w - dialog_w) // 2
+        y = parent_y + (parent_h - dialog_h) // 2
+
+        dialog.geometry(f"+{x}+{y}")
+        dialog.deiconify()
+
+        master.wait_window(dialog)
+        return result["name"] if len(result["name"]) > 0 else None
 
     def edit_preset_relics(self, preset_info):
         """Open dialog to edit relics in a preset"""
@@ -2900,6 +2966,19 @@ class SaveEditorGUI:
         left_panel.pack_propagate(False)
 
         # Header
+        def on_header_click(_):
+            new_name = self.ask_preset_name(dialog, preset["name"])
+            # Restore grab (modal state) to this dialog
+            # as the sub-dialog `ask_preset_name` stole it.
+            if dialog.winfo_exists():
+                dialog.grab_set()
+
+            if not new_name:
+                return
+            self.loadout_handler.rename_preset(preset["index"], new_name)
+            header.config(text=f"{char_name} - {new_name}")
+            self.refresh_presets()
+
         header = tk.Label(
             left_panel,
             text=f"{char_name} - {preset_name}",
@@ -2908,6 +2987,7 @@ class SaveEditorGUI:
             bg=BG_DARK,
         )
         header.pack(anchor="w", pady=(0, 10))
+        header.bind("<Button-1>", on_header_click)
 
         vessel_info = get_vessel_info(char_name, vessel_slot)
         vessel_name = vessel_info.get("name", f"Vessel {vessel_slot}")
@@ -3151,11 +3231,6 @@ class SaveEditorGUI:
                 messagebox.showerror(
                     "Error", f"Failed to clear relic from preset:\n{e}"
                 )
-            # self.write_preset_relic(preset_offset, idx, 0)
-            # slot_relic_data[idx] = None
-            # update_slot_display()
-            # update_details_panel()
-            # self.refresh_presets()
 
         def edit_selected_relic():
             """Open the modify dialog for the relic in the selected slot"""
@@ -3168,20 +3243,17 @@ class SaveEditorGUI:
             ga = ga_handles[idx]
             real_id = relic_data.get("real_id", 0)
 
-            # Release grab so we can interact with the edit dialog
-            dialog.grab_release()
-
             def refresh_after_edit():
                 # Refresh main inventory (this updates ga_relic)
                 self.refresh_inventory_lightly()
                 # Rebuild relic info from updated ga_relic
-                for ga in self.inventory_handler.relic_gas:
-                    relic = self.inventory_handler.relics[ga]
+                for _ga in self.inventory_handler.relic_gas:
+                    relic = self.inventory_handler.relics[_ga]
                     real_id = relic.state.real_item_id
                     item_info = self.game_data.relics.get(real_id)
                     effects = relic.state.effects_and_curses[:3]
                     curses = relic.state.effects_and_curses[3:]
-                    ga_to_full_info[ga] = {
+                    ga_to_full_info[_ga] = {
                         "name": item_info.name if item_info else f"ID:{real_id}",
                         "color": item_info.color if item_info else "Unknown",
                         "real_id": real_id,
@@ -3194,26 +3266,17 @@ class SaveEditorGUI:
                     slot_relic_data[idx] = new_relic_data
                     update_slot_display()
                     update_details_panel()
-
-            def on_edit_dialog_close():
-                # Restore grab when edit dialog closes
-                if dialog.winfo_exists():
-                    dialog.grab_set()
+                self.refresh_presets()
 
             # Open or reuse modify dialog
             if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
                 self.modify_dialog = ModifyRelicDialog(
-                    self.root, ga, real_id, refresh_after_edit
+                    dialog, ga, real_id, refresh_after_edit
                 )
             else:
                 self.modify_dialog.load_relic(ga, real_id)
                 self.modify_dialog.callback = refresh_after_edit
 
-            # Set up close protocol and bring to front
-            self.modify_dialog.dialog.protocol(
-                "WM_DELETE_WINDOW",
-                lambda: [self.modify_dialog.dialog.destroy(), on_edit_dialog_close()],
-            )
             self.modify_dialog.dialog.lift()
             self.modify_dialog.dialog.focus_force()
 
@@ -3551,6 +3614,20 @@ class SaveEditorGUI:
         update_slot_display()
         update_details_panel()
         populate_relic_list()
+
+    def delete_preset(self, preset_info):
+        """Delete a preset after confirmation"""
+        preset = preset_info["preset"]
+        if not messagebox.askyesno(
+            "Delete Preset",
+            f"Are you sure to delete preset '{preset['name']}'?",
+        ):
+            return
+        try:
+            self.loadout_handler.remove_preset(preset["index"])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete preset:\n{e}")
+        self.refresh_vessels()
 
     def write_preset_relic(self, preset_offset, slot_idx, new_ga_handle):
         """Write a relic GA handle to a preset slot in the save file"""
@@ -4536,15 +4613,6 @@ class SaveEditorGUI:
         lang_mgr.register(btn_delete_all, N_("🗑️ Delete All Illegal"))
         btn_delete_all.pack(side="left", padx=5)
 
-        btn_delete_slct = ttk.Button(
-            controls_frame,
-            text="🗑️ Mass Delete Selected",
-            command=self.mass_delete_relics,
-            style="Danger.TButton",
-        )
-        lang_mgr.register(btn_delete_slct, N_("🗑️ Mass Delete Selected"))
-        btn_delete_slct.pack(side="left", padx=5)
-
         btn_mfix = ttk.Button(
             controls_frame, text="🔧 Mass Fix", command=self.mass_fix_incorrect_ids
         )
@@ -4910,7 +4978,7 @@ class SaveEditorGUI:
         # This allows custom save file names (e.g., from ModEngine 3 Manager)
         if file_name.lower() == "memory.dat":
             MODE = "PS4"
-        elif file_path.lower().endswith(".sl2"):
+        elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
             # Check if it's a valid SL2 file by looking for BND4 header
             try:
                 with open(file_path, "rb") as f:
@@ -5564,24 +5632,30 @@ class SaveEditorGUI:
             self.tree.heading("#0", text="")
 
     def show_context_menu(self, event):
-        # Select item under cursor
-        item = self.tree.identify_row(event.y)
-        if item:
-            self.tree.selection_set(item)
+        selections = self.tree.selection()
+        target_item = self.tree.identify_row(event.y)
+        if not target_item:
+            return
 
-            menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
-            menu.add_separator()
+        # Clear current selection if it does not include target item
+        if target_item not in selections:
+            self.tree.selection_set(target_item)
+            selections = (target_item,)
+
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
+        menu.add_separator()
+        if len(selections) == 1:
             menu.add_command(label="Modify", command=self.modify_selected_relic)
-            menu.add_command(
-                label="Delete",
-                foreground="red",
-                font=("Arial", 9, "bold"),
-                command=self.delete_selected_relic,
-            )
+        menu.add_command(
+            label="Delete",
+            foreground="red",
+            font=("Arial", 9, "bold"),
+            command=self.delete_selected_relic,
+        )
+        if len(selections) == 1:
             menu.add_separator()
             menu.add_command(label="📋 Copy Effects", command=self.copy_relic_effects)
-
             # Only enable paste if we have something in clipboard
             paste_label = "📋 Paste Effects"
             if self.clipboard_effects:
@@ -5591,19 +5665,19 @@ class SaveEditorGUI:
                 command=self.paste_relic_effects,
                 state="normal" if self.clipboard_effects else "disabled",
             )
-            menu.post(event.x_root, event.y_root)
+        menu.post(event.x_root, event.y_root)
 
     def toggle_favorite(self):
         """Toggle favorite status of selected relic"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
-            return
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        self.inventory_handler.toggle_favorite_mark(ga_handle)
-        self.refresh_inventory_and_vessels()
+
+        def task():
+            selections = self.tree.selection()
+            for item in selections:
+                tags = self.tree.item(item, "tags")
+                ga_handle = int(tags[0])
+                self.inventory_handler.toggle_favorite_mark(ga_handle)
+
+        self.run_task_async(task, callback=self.refresh_inventory_and_vessels)
 
     def copy_relic_effects(self):
         """Copy effects from selected relic to clipboard"""
@@ -5739,7 +5813,7 @@ class SaveEditorGUI:
 
         # Check if multiple items selected
         if len(selection) > 1:
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete {len(selection)} relics?",
             )
@@ -5747,42 +5821,56 @@ class SaveEditorGUI:
             item = selection[0]
             tags = self.tree.item(item, "tags")
             item_id = int(tags[1])
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete this relic (ID: {item_id})?",
             )
+        if not confirmed:
+            return
 
-        if result:
-            deleted_count = 0
-            failed_count = 0
+        stats = {
+            "success_count": 0,
+            "fail_count": 0,
+            "last_reason": "",
+        }
 
+        def task():
             for item in selection:
                 tags = self.tree.item(item, "tags")
                 ga_handle = int(tags[0])
-                item_id = int(tags[1])
-
                 try:
-                    del_result = self.inventory_handler.remove_relic_from_inventory(
-                        ga_handle
-                    )
+                    self.inventory_handler.remove_relic_from_inventory(ga_handle)
+                    stats["success_count"] += 1
                 except Exception as e:
-                    del_result = False
+                    stats["fail_count"] += 1
+                    stats["last_reason"] = str(e)
 
-                if del_result:
-                    deleted_count += 1
-                else:
-                    failed_count += 1
-
-            if deleted_count > 0:
-                messagebox.showinfo(
-                    "Success",
-                    f"Deleted {deleted_count} relic(s) successfully"
-                    + (f"\n{failed_count} failed" if failed_count > 0 else ""),
+        def complete():
+            success_count = stats["success_count"]
+            fail_count = stats["fail_count"]
+            last_reason = stats["last_reason"]
+            reason_string = f"\n{last_reason}." if fail_count == 1 else ""
+            if fail_count == 0:
+                msg_info("Success", f"Deleted {success_count} relic(s).")
+            elif success_count > 0:
+                messagebox.showwarning(
+                    "Warning",
+                    f"Deleted {success_count} relic(s) successfully."
+                    f"\n{fail_count} failed."
+                    f"{reason_string}",
                 )
+            else:
+                messagebox.showerror(
+                    "Error",
+                    f"Delete failed."
+                    f"{reason_string}",
+                )
+
+            if success_count>0:
                 self.refresh_inventory_lightly()
                 save_current_data()
-            else:
-                messagebox.showerror("Error", "Failed to delete relics")
+
+        self.run_task_async(task, callback=complete)
 
     def select_all_relics(self):
         """Select all relics in the tree"""
@@ -5803,68 +5891,6 @@ class SaveEditorGUI:
 
         self.tree.selection_remove(self.tree.selection())
         self.tree.selection_set(new_selection)
-
-    def mass_delete_relics(self):
-        """Delete all currently selected relics"""
-        selection = self.tree.selection()
-        if not selection:
-            msg_warning(
-                "Warning",
-                "No relics selected. Use the tree selection to choose relics to delete.",
-            )
-            return
-
-        # Check for forbidden relics in selection
-        forbidden_count = 0
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            if "forbidden" in tags:
-                forbidden_count += 1
-
-        # Confirmation message
-        confirm_msg = (
-            f"Are you sure you want to delete {len(selection)} selected relic(s)?"
-        )
-        if forbidden_count > 0:
-            confirm_msg += (
-                f"\n\n⚠️ WARNING: {forbidden_count} of these are 'Do Not Edit' relics!"
-            )
-            confirm_msg += "\n\nDeleting these may cause issues!"
-
-        result = messagebox.askyesno(
-            "Confirm Mass Delete",
-            confirm_msg,
-            icon="warning" if forbidden_count > 0 else "question",
-        )
-
-        if not result:
-            return
-
-        # Delete all selected relics
-        deleted_count = 0
-        failed_count = 0
-
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            ga_handle = int(tags[0])
-            item_id = int(tags[1])
-
-            result = self.inventory_handler.remove_relic_from_inventory(ga_handle)
-            if result:
-                deleted_count += 1
-            else:
-                failed_count += 1
-
-        # Show result
-        if deleted_count > 0:
-            message = f"Successfully deleted {deleted_count} relic(s)"
-            if failed_count > 0:
-                message += f"\n{failed_count} failed to delete"
-            messagebox.showinfo("Mass Delete Complete", message)
-            self.refresh_inventory_lightly()
-            save_current_data()
-        else:
-            messagebox.showerror("Error", "Failed to delete any relics")
 
     def mass_fix_incorrect_ids(self):
         """Find and fix all problematic relics (illegal and strict invalid)"""
@@ -6143,27 +6169,54 @@ class SaveEditorGUI:
                 "Warning", "No save file loaded. Please open a save file first."
             )
             return
+
         relic_type_selector = RelicTypeSelector(self.root)
         if not relic_type_selector.result:
             return
-        try:
-            added_result, new_ga = self.inventory_handler.add_relic_to_inventory(
-                relic_type=relic_type_selector.result
-            )
-            if added_result:
-                msg_info("Success", "Dummy relic added. Refreshing inventory.")
-                self.refresh_inventory_and_vessels()
-                # Find Added item by new_ga
-                for item in self.tree.get_children():
-                    item_ga = int(self.tree.item(item, "tags")[0])
-                    if item_ga == new_ga:
-                        self.tree.selection_set(item)
-                        self.tree.focus(item)
-                        self.tree.see(item)
-                        break
-                self.modify_selected_relic()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add relic: {e}")
+        count = relic_type_selector.count
+        stats = {
+            "success_count": 0,
+            "error": False,
+            "reason": "",
+            "last_ga": -1,
+        }
+
+        def task():
+            for _ in range(count):
+                try:
+                    _, new_ga = self.inventory_handler.add_relic_to_inventory(
+                        relic_type_selector.result
+                    )
+                    stats["success_count"] += 1
+                    stats["last_ga"] = new_ga
+                except Exception as e:
+                    stats["error"] = True
+                    stats["reason"] = str(e)
+                    break
+
+        def complete():
+            self.refresh_inventory_and_vessels()
+
+            if stats["error"]:
+                messagebox.showerror(
+                    "Error",
+                    f"An error occurred while adding relic #{stats['success_count']+1}"
+                    f"\n{stats['reason']}",
+                )
+                return
+            msg_info("Success", f"{stats['success_count']} dummy relic(s) added.")
+
+            # Find the added item by last_ga
+            for item in self.tree.get_children():
+                item_ga = int(self.tree.item(item, "tags")[0])
+                if item_ga == stats["last_ga"]:
+                    self.tree.selection_set(item)
+                    self.tree.focus(item)
+                    self.tree.see(item)
+                    break
+            self.modify_selected_relic()
+
+        self.run_task_async(task, callback=complete)
 
     def _find_valid_relic_id_for_effects(self, current_id, effects):
         """Find a valid relic ID that can have the given effects (must be same color)"""
@@ -6356,8 +6409,8 @@ class SaveEditorGUI:
 
     def save_changes(self):
         if globals.data and userdata_path:
-            save_file()
-            messagebox.showinfo("Success", "Changes saved to file")
+            if save_file():
+                messagebox.showinfo("Success", "Changes saved to file")
         else:
             messagebox.showwarning("Warning", "No character loaded")
 
@@ -6456,8 +6509,8 @@ class ModifyRelicDialog:
                 else:
                     self.effect_name_labels[i].config(text="Unknown Effect")
 
-        # Update curse indicators after loading
-        self._update_curse_indicators()
+        # Update effect indicators after loading
+        self._update_effect_indicators()
 
     def _update_color_display(self):
         """Update the current color label"""
@@ -7278,14 +7331,14 @@ class ModifyRelicDialog:
         # This handles cases where selected effect needs a curse
         self._auto_find_valid_relic_id()
 
-        # Update curse indicators when effect or curse slots change
-        self._update_curse_indicators()
+        # Update effect indicators when effect or curse slots change
+        self._update_effect_indicators()
 
         self.update_debug_info()
 
-    def _update_curse_indicators(self):
-        """Update curse slot labels to show which ones NEED to be filled"""
-        effect_labels_base = [
+    def _update_effect_indicator(self, slot_index: int):
+        """Update effect label to show validation status"""
+        effect_labels = [
             "Effect 1",
             "Effect 2",
             "Effect 3",
@@ -7294,46 +7347,79 @@ class ModifyRelicDialog:
             "Curse 3",
         ]
 
-        for i in range(3):
-            effect_idx = i
-            curse_idx = i + 3
+        label = effect_labels[slot_index]
+        try:
+            effect_id = int(self.effect_entries[slot_index].get())
+        except ValueError:
+            effect_id = 0
+        is_curse_slot = slot_index >= 3
 
+        # Check compatibility
+        conflict_id = self.game_data.effects[effect_id].conflict_id
+        if conflict_id != -1:
+            for slot_index2 in range(3) if not is_curse_slot else range(3, 6):
+                if slot_index == slot_index2:
+                    continue
+
+                label2 = effect_labels[slot_index2]
+                try:
+                    effect_id2 = int(self.effect_entries[slot_index2].get())
+                except ValueError:
+                    effect_id2 = 0
+                conflict_id2 = self.game_data.effects[effect_id2].conflict_id
+
+                if conflict_id2 == -1:
+                    continue
+
+                if conflict_id == conflict_id2:
+                    self.slot_labels[slot_index].config(
+                        text=f"⚠️ {label} (Conflicts with {label2}):",
+                        style="illegal.TLabel",
+                    )
+                    return
+
+        # Check curse
+        if is_curse_slot:
+            related_slot_index = slot_index - 3
             try:
-                effect_id = int(self.effect_entries[effect_idx].get())
-                curse_id = int(self.effect_entries[curse_idx].get())
+                related_effect_id = int(self.effect_entries[related_slot_index].get())
             except ValueError:
-                effect_id = 0
-                curse_id = 0
+                related_effect_id = 0
 
-            # Check if this effect needs a curse
-            needs_curse = False
-            has_curse = curse_id not in [0, -1, 4294967295]
-
-            if effect_id not in [0, -1, 4294967295]:
-                needs_curse = self.game_data.effect_needs_curse(effect_id)
+            needs_curse = self.game_data.effect_needs_curse(related_effect_id)
+            has_curse = effect_id not in (0, -1, 4294967295)
 
             # Update the curse slot label
-            base_label = effect_labels_base[curse_idx]
             if needs_curse and not has_curse:
                 # Needs curse but doesn't have one - show warning
-                self.slot_labels[curse_idx].config(
-                    text=f"⚠️ {base_label} (REQUIRED):", foreground="red"
+                self.slot_labels[slot_index].config(
+                    text=f"⚠️ {label} (REQUIRED):", style="illegal.TLabel"
                 )
             elif needs_curse and has_curse:
                 # Needs curse and has one - show satisfied
-                self.slot_labels[curse_idx].config(
-                    text=f"✓ {base_label}:", foreground="green"
+                self.slot_labels[slot_index].config(
+                    text=f"✓ {label}:", style="valid.TLabel"
                 )
             elif not needs_curse and has_curse:
                 # Doesn't need curse but has one - ILLEGAL
-                self.slot_labels[curse_idx].config(
-                    text=f"⛔ {base_label} (ILLEGAL - remove curse):", foreground="red"
+                self.slot_labels[slot_index].config(
+                    text=f"⛔ {label} (ILLEGAL - remove curse):",
+                    style="illegal.TLabel",
                 )
             else:
                 # Doesn't need curse and doesn't have one - correct
-                self.slot_labels[curse_idx].config(
-                    text=f"{base_label} (not needed):", foreground="gray"
+                self.slot_labels[slot_index].config(
+                    text=f"{label} (not needed):", style="TLabel"
                 )
+            return
+
+        # Default no special indicator
+        self.slot_labels[slot_index].config(text=f"{label}:", style="TLabel")
+
+    def _update_effect_indicators(self):
+        """Update all effect indicators"""
+        for i in range(6):
+            self._update_effect_indicator(i)
 
     def search_items(self):
         """Open search dialog for items"""
@@ -7811,38 +7897,17 @@ class ModifyRelicDialog:
                 messagebox.showerror("Error", "Invalid relic ID in entry field")
                 return
 
-            try:
-                _effects = [int(entry.get()) for entry in self.effect_entries]
-                _pools = self.game_data.get_adjusted_pool_sequence(
-                    _cut_relic_id, _effects
-                )
-                _pool_id = _pools[effect_index]
-            except (KeyError, IndexError, ValueError) as e:
-                messagebox.showerror(
-                    "Error", f"Could not get pool for relic {_cut_relic_id}: {e}"
-                )
-                return
-
-            _pool_effects = self.game_data.get_pool_rollable_effects(_pool_id)
-
-            # For curse slots (index >= 3), if this specific pool is disabled,
-            # use ALL available curse pools combined (game rearranges internally)
-            if not _pool_effects and is_curse_slot:
-                # Combine effects from all available curse pools
-                all_curse_effects = set()
-                for i in range(3):
-                    curse_pool = _pools[3 + i]
-                    if curse_pool != -1:
-                        pool_effects = self.game_data.get_pool_rollable_effects(
-                            curse_pool
-                        )
-                        all_curse_effects.update(pool_effects)
-                _pool_effects = list(all_curse_effects)
+            if is_curse_slot:
+                pool_type = "curse"
+            elif self.game_data.is_deep_relic(_cut_relic_id):
+                pool_type = "deep"
+            else:
+                pool_type = "normal"
+            _pool_effects = self.game_data.get_rollable_effects(pool_type)
 
             if not _pool_effects:
                 # Slot is disabled and no alternatives available
                 slot_type = "effect" if effect_index < 3 else "curse"
-                slot_num = (effect_index % 3) + 1
                 self.effect_entries[effect_index].delete(0, tk.END)
                 self.effect_entries[effect_index].insert(0, str(0xFFFFFFFF))
                 self.on_effect_change(effect_index)
@@ -7857,62 +7922,37 @@ class ModifyRelicDialog:
             _effect_params_df = _effect_params_df[
                 _effect_params_df.index.isin(_pool_effects)
             ]
-            match effect_index:
-                case 1:
-                    _effect_id_1 = int(self.effect_entries[0].get())
-                    _conflic_id_1 = self.game_data.effects[_effect_id_1].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (_effect_params_df["compatibilityId"] != _conflic_id_1)
-                    ]
-                case 2:
-                    _effect_id_1 = int(self.effect_entries[0].get())
-                    _conflic_id_1 = self.game_data.effects[_effect_id_1].conflict_id
-                    _effect_id_2 = int(self.effect_entries[1].get())
-                    _conflic_id_2 = self.game_data.effects[_effect_id_2].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (
-                            (_effect_params_df["compatibilityId"] != _conflic_id_1)
-                            & (_effect_params_df["compatibilityId"] != _conflic_id_2)
-                        )
-                    ]
-                case 4:
-                    _effect_id_4 = int(self.effect_entries[3].get())
-                    _conflic_id_4 = self.game_data.effects[_effect_id_4].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (_effect_params_df["compatibilityId"] != _conflic_id_4)
-                    ]
-                case 5:
-                    _effect_id_4 = int(self.effect_entries[3].get())
-                    _conflic_id_4 = self.game_data.effects[_effect_id_4].conflict_id
-                    _effect_id_5 = int(self.effect_entries[4].get())
-                    _conflic_id_5 = self.game_data.effects[_effect_id_5].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (
-                            (_effect_params_df["compatibilityId"] != _conflic_id_4)
-                            & (_effect_params_df["compatibilityId"] != _conflic_id_5)
-                        )
-                    ]
+
             _items = _effect_params_df.index.tolist()
+            _warned_items = []
+            # Warn conflicting effects
+            for i in range(3) if not is_curse_slot else range(3, 6):
+                if i == effect_index:
+                    continue
+                _effect_id = int(self.effect_entries[i].get())
+                _conflic_id = self.game_data.effects[_effect_id].conflict_id
+                _compatible_effect_params_df = _effect_params_df[
+                    (_effect_params_df["compatibilityId"] == -1)
+                    | (_effect_params_df["compatibilityId"] != _conflic_id)
+                ]
+                _compatible_items = _compatible_effect_params_df.index.tolist()
+                _warned_items.extend(
+                    item for item in _items if item not in _compatible_items
+                )
+            _warned_items = list(set(_warned_items))  # Remove duplicates
+
+            # Add "Empty" effect at the top
+            _items.insert(0, 0xFFFFFFFF)
         else:
             _items = [int(k) for k in self.game_data.effects.keys()]
+            _warned_items = []
 
-        # For curse slots, add "No Curse (Empty)" option at the top
-        if is_curse_slot:
-            _items.insert(0, 0xFFFFFFFF)
-
-        # Build dialog title with relic type info in safe mode
+        # Build dialog title with slot type in safe mode
         if self.safe_mode_var.get():
-            relic_type, _, _ = self.game_data.get_relic_type_info(_cut_relic_id)
             slot_type = "Curse" if is_curse_slot else "Effect"
-            dialog_title = (
-                f"Select {slot_type} {(effect_index % 3) + 1} — {relic_type} Pools"
-            )
+            dialog_title = f"Select {slot_type} {(effect_index % 3) + 1}"
         else:
-            dialog_title = f"Select Effect {effect_index + 1} — All Effects (Unsafe)"
+            dialog_title = f"Select Effect {effect_index + 1} (Unsafe)"
 
         SearchDialog(
             self.dialog,
@@ -7921,6 +7961,7 @@ class ModifyRelicDialog:
             _items,
             dialog_title,
             lambda item_id: self.on_effect_selected(effect_index, item_id),
+            _warned_items,
         )
 
     def on_item_selected(self, item_id):
@@ -8021,8 +8062,18 @@ class SearchDialog:
     game_data: Optional[SourceDataHandler] = None
     relic_checker: Optional[RelicChecker] = None
 
-    def __init__(self, parent, item_id, search_type, id_list, title, callback):
+    def __init__(
+        self,
+        parent,
+        item_id,
+        search_type,
+        id_list,
+        title,
+        callback,
+        warned_id_list: list[int] | None = None,
+    ):
         self.id_list = id_list
+        self.warned_id_list = [] if warned_id_list is None else warned_id_list
         self.callback = callback
         self.search_type = search_type
         self.item_id = item_id
@@ -8264,6 +8315,27 @@ class SearchDialog:
             side="right", padx=5
         )
 
+    @staticmethod
+    def to_halfwidth(text: str):
+        fullwidth_to_halfwidth = {
+            "０": "0",
+            "１": "1",
+            "２": "2",
+            "３": "3",
+            "４": "4",
+            "５": "5",
+            "６": "6",
+            "７": "7",
+            "８": "8",
+            "９": "9",
+            "＋": "+",
+        }
+
+        def replace(match):
+            return fullwidth_to_halfwidth.get(match.group(0), match.group(0))
+
+        return re.sub(r"[０-９]", replace, text)
+
     def filter_results(self):
         search_term = self.search_var.get().lower()
 
@@ -8302,8 +8374,18 @@ class SearchDialog:
                     if self.curse_slots_var.get() != str(curse_slots):
                         continue
 
-            if search_term in name.lower() or search_term in item_id:
-                self.listbox.insert(tk.END, f"{name} (ID: {item_id})")
+            sub_terms = search_term.split(" ")
+            for sub_term in sub_terms:
+                if sub_term in self.to_halfwidth(name.lower()):
+                    continue
+                if sub_term in item_id:
+                    continue
+                break
+            else:
+                self.listbox.insert(
+                    tk.END,
+                    f"{'⚠️ '*(int(item_id) in self.warned_id_list)}{name} (ID: {item_id})",
+                )
 
     def on_select(self, event=None):
         selection = self.listbox.curselection()
@@ -8317,15 +8399,12 @@ class SearchDialog:
         self.dialog.destroy()
 
 
-import tkinter as tk
-from tkinter import ttk
-
-
 class RelicTypeSelector(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Select Relic Type")
         self.result = None
+        self.count = 1
 
         self.resizable(False, False)
 
@@ -8337,6 +8416,37 @@ class RelicTypeSelector(tk.Toplevel):
             text="Select relic type to create.\nNote: Type cannot be changed later.",
             justify=tk.CENTER,
         ).pack(pady=10)
+
+        quantity_frame = ttk.Frame(main_frame)
+        quantity_frame.pack(pady=(0, 10))
+
+        ttk.Label(
+            quantity_frame,
+            text="Quantity:",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.quantity_var = tk.StringVar(value=str(self.count))
+        quantity_entry = ttk.Spinbox(
+            quantity_frame,
+            textvariable=self.quantity_var,
+            width=10,
+            from_=1,
+            to=999,
+            style="TEntry",
+        )
+        quantity_entry.pack(side=tk.LEFT)
+
+        def on_validate_input(val: str):
+            if val == "":
+                return True
+            try:
+                count = int(val)
+            except ValueError:
+                return False
+            return 1 <= count <= 999
+
+        vcmd = (self.register(on_validate_input), "%P")
+        quantity_entry.config(validate="key", validatecommand=vcmd)
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(pady=5)
@@ -8361,6 +8471,9 @@ class RelicTypeSelector(tk.Toplevel):
 
         self.center_window(parent)
         self.focus_force()
+        quantity_entry.focus_set()
+        quantity_entry.select_range(0, tk.END)
+        quantity_entry.icursor(tk.END)
 
         self.transient(parent)
         self.grab_set()
@@ -8383,6 +8496,13 @@ class RelicTypeSelector(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
 
     def set_result(self, value):
+        try:
+            quantity = int(self.quantity_var.get())
+            if quantity < 1:
+                quantity = 1
+        except ValueError:
+            quantity = 1
+        self.count = quantity
         self.result = value
         self.destroy()
 

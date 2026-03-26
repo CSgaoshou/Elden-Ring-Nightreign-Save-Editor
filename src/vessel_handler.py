@@ -1,16 +1,16 @@
-import datetime
-import os
-import struct
-import re
-from copy import deepcopy
-import orjson
 import logging
-from source_data_handler import SourceDataHandler
-from relic_checker import RelicChecker
-from inventory_handler import InventoryHandler, ItemEntry
-import globals
-from globals import ITEM_TYPE_RELIC, COLOR_MAP, get_now_timestamp, UNIQUENESS_IDS
+import re
+import struct
+from copy import deepcopy
+from typing import TypedDict
 
+import orjson
+
+import globals
+from globals import COLOR_MAP, ITEM_TYPE_RELIC, UNIQUENESS_IDS, get_now_timestamp
+from inventory_handler import InventoryHandler, ItemEntry
+from relic_checker import RelicChecker
+from source_data_handler import SourceDataHandler
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,30 @@ def is_vessel_available(vessel_id: int):
         return False
 
 
+class Preset(TypedDict):
+    hero_type: int
+    index: int
+    name: str
+    vessel_id: int
+    relics: list[int]
+    offsets: dict[str, int]
+    counter: int
+    timestamp: int
+
+
+def calc_preset_offsets(base_offset: int):
+    return {
+        "base": base_offset,
+        "hero_type": base_offset + 1,
+        "unknown_1": base_offset + 2,
+        "counter": base_offset + 3,
+        "name": base_offset + 4,
+        "vessel_id": base_offset + 44,  # 4 + 36 + 4 padding
+        "relics": base_offset + 48,
+        "timestamp": base_offset + 72,  # not sure
+    }
+
+
 class HeroLoadout:
     def __init__(self, hero_type, cur_preset_idx, cur_vessel_id, vessels, offsets):
         self.hero_type = hero_type
@@ -33,7 +57,7 @@ class HeroLoadout:
         # vessel list[dict]， keys: vessel_id, relics, offsets:dict
         #   offsets store offests for vessel_id and relics, keys: vessel_id, relics
         self.vessels = vessels
-        self.presets = []
+        self.presets: list[Preset] = []
         # Stores offsets for hero-level fields
         self.offsets = offsets
 
@@ -191,7 +215,7 @@ class HeroLoadout:
         result_msgs = []
         for idx, im_v in enumerate(im_vessels):
             if idx not in vessel_indices:
-                result_msgs.append(f"{game_data.vessels[im_v["vessel_id"]].name} skipped.")
+                result_msgs.append(f"{game_data.vessels[im_v['vessel_id']].name} skipped.")
                 continue
             for v in self.vessels:
                 if v["vessel_id"] == im_v["vessel_id"]:
@@ -237,8 +261,7 @@ class VesselParser:
 
         match = re.search(magic_pattern + marker, globals.data)
         if not match:
-            print("[Error] Magic pattern not found.")
-            return
+            raise ValueError("[Error] Magic pattern not found.")
 
         cursor = match.start()
 
@@ -328,25 +351,15 @@ class VesselParser:
 
         # 3. Custom Presets Section
         preset_index = 0
+        LoadoutHandler().unused_preset_slots.clear()
         while cursor < len(globals.data):
             p_start = cursor
-            header = struct.unpack_from("<B", globals.data, cursor)[0]
-            if header != 0x01:
-                break
 
             # Offsets for custom preset fields
-            p_offsets = {
-                "base": p_start,
-                "hero_type": p_start + 1,
-                "counter": p_start + 3,
-                "name": p_start + 4,
-                "vessel_id": p_start + 44,  # 4 + 36 + 4 padding
-                "relics": p_start + 48,
-                "timestamp": p_start + 72  # not sure
-            }
+            p_offsets = calc_preset_offsets(p_start)
 
             cursor += 1
-            h_id = int(struct.unpack_from("<H", globals.data, cursor)[0])
+            h_id = int(struct.unpack_from("<B", globals.data, cursor)[0])
             cursor += 2
             counter_val = struct.unpack_from("<B", globals.data, cursor)[0]
             cursor += 1
@@ -370,9 +383,21 @@ class VesselParser:
             cursor += 8
 
             if h_id in heroes:
-                heroes[h_id].add_preset(h_id, preset_index, name, v_id, relics, p_offsets, counter_val, timestamp)
-
-            preset_index += 1
+                heroes[h_id].add_preset(
+                    h_id,
+                    preset_index,
+                    name,
+                    v_id,
+                    relics,
+                    p_offsets,
+                    counter_val,
+                    timestamp,
+                )
+                preset_index += 1
+            elif h_id == 0:
+                LoadoutHandler().unused_preset_slots.append(p_start)
+            else:
+                raise RuntimeError(f"Unknown hero ID {h_id}.")
 
             if counter_val == 0:
                 break
@@ -569,8 +594,6 @@ class Validator:
             raise ValueError("Preset must contain at least one relic.")
         self.validate_vessel(heroes, hero_type, _t_vessel)
         for preset in heroes[hero_type].presets:
-            if preset["index"] == new_preset["index"]:
-                raise ValueError("Preset index duplicated. This shouldn't happen.")
             if preset["vessel_id"] == new_preset["vessel_id"] and preset["relics"] == new_preset["relics"]:
                 raise ValueError(f"Preset relics combination exists. Preset Name: {preset['name']}")
 
@@ -600,7 +623,9 @@ class LoadoutHandler:
         self.parser = VesselParser()
         self.modifier = VesselModifier()
         self.validator = Validator()
-        self.all_presets = []
+        self.all_presets: list[Preset] = []
+        self.unused_preset_slots: list[int] = []
+        """base offset of unused preset slot"""
 
     @property
     def heroes(self):
@@ -679,10 +704,55 @@ class LoadoutHandler:
         else:
             raise ValueError("Invalid preset index")
 
+    def _sort_preset(self):
+        """Sort presets by offset, and ensure 0-counter preset at the end."""
+        if not self.all_presets:
+            return
+        self.all_presets.sort(key=lambda x: x["offsets"]["base"])
+        zero_preset_index = -1
+        for i, preset in enumerate(self.all_presets):
+            preset["index"] = i
+            if preset["counter"] == 0:
+                zero_preset_index = i
+        if zero_preset_index < 0:
+            raise RuntimeError("Not found a preset with 0 counter")
+        if zero_preset_index != len(self.all_presets) - 1:
+            self._swap_preset(zero_preset_index, -1)
+
+    def _swap_preset(self, preset_index1: int, preset_index2: int):
+        """Swap 2 presets and their index, offsets"""
+        preset1 = self.all_presets[preset_index1]
+        preset2 = self.all_presets[preset_index2]
+        (
+            self.all_presets[preset_index1],
+            self.all_presets[preset_index2],
+        ) = (
+            self.all_presets[preset_index2],
+            self.all_presets[preset_index1],
+        )
+        (
+            preset1["offsets"],
+            preset2["offsets"],
+        ) = (
+            preset2["offsets"],
+            preset1["offsets"],
+        )
+        (
+            preset1["index"],
+            preset2["index"],
+        ) = (
+            preset2["index"],
+            preset1["index"],
+        )
+
+    def rename_preset(self, preset_index: int, new_name: str):
+        self.all_presets[preset_index]["name"] = new_name
+        self.update_all_loadouts()
+
     def push_preset(self, hero_type: int, vessel_id: int, relics: list[int], name: str):
         """
         Append a new preset to the specified hero's loadout.
-        
+
         :param hero_type: 1-based\n
             sequence: 1~10 for normal heroes, 11 for universal vessels\n
             ['Wylder', 'Guardian', 'Ironeye', 'Duchess', 'Raider',\n
@@ -692,53 +762,65 @@ class LoadoutHandler:
         :type vessel_id: int
         :param relics: ga_handles
         :type relics: list[int]
-        :param name: Perset Name, Max Chars 18
+        :param name: Preset Name, Max Chars 18
         :type name: str
-
-        :returns: return the modified data as immutable bytes.
-        :rtype: bytes
         """
         self.check_hero(hero_type)
         # Check Preset Capacity
         if len(self.all_presets) > 100:
             raise LoadoutHandler.PresetsCapacityFullError("Maximum preset capacity reached.")
 
-        # Check Relics Validity
-
-        # All Valid
         # Create a new preset
-        # new preset offsets are caculated by last preset
-        new_preset_offsets = {
-            "base": self.all_presets[-1]["offsets"]["base"] + 80 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4,  # Heuristic: 10 heroes * 120 bytes + 60 vessels * 28 bytes + 4 bytes padding
-            "hero_type": self.all_presets[-1]["offsets"]["base"] + 80 + 1 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 1,
-            "counter": self.all_presets[-1]["offsets"]["base"] + 80 + 3 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 3,
-            "name": self.all_presets[-1]["offsets"]["base"] + 80 + 4 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 4,
-            "vessel_id": self.all_presets[-1]["offsets"]["base"] + 80 + 44 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 44,
-            "relics": self.all_presets[-1]["offsets"]["base"] + 80 + 48 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 48,
-            "timestamp": self.all_presets[-1]["offsets"]["base"] + 80 + 72 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 72,
-        }
-
+        if not self.all_presets:
+            # Heuristic: 10 heroes * 120 bytes + 60 vessels * 28 bytes + 4 bytes padding
+            base_offset = self.parser.base_offset + 120 * 10 + 28 * 70 + 4
+            self.unused_preset_slots.clear()
+        elif self.unused_preset_slots:
+            base_offset = self.unused_preset_slots.pop(0)
+        else:
+            base_offset = self.all_presets[-1]["offsets"]["base"] + 80
+        new_preset_offsets = calc_preset_offsets(base_offset)
         new_timestamp = get_now_timestamp()
-
-        new_preset = {
+        new_preset: Preset = {
             "hero_type": hero_type,
-            "index": len(self.all_presets),
             "name": name,
             "vessel_id": vessel_id,
             "relics": relics,
             "counter": 0,
             "timestamp": new_timestamp,
-            "offsets": new_preset_offsets
+            "offsets": new_preset_offsets,
         }
+
         # Check preset, if invalid will raise Exception
         self.validator.validate_preset(self.heroes, hero_type, new_preset)
-        for hero in self.heroes.values():
-            for preset in hero.presets:
-                preset["counter"] += 1
+        for preset in self.all_presets:
+            preset["counter"] += 1
+        self.all_presets.append(new_preset)
+        self._sort_preset()
+
+        # Add to hero preset
         self.heroes[hero_type].add_preset(**new_preset)
-        self.all_presets = [p for h in self.heroes.values() for p in h.presets]
-        self.all_presets.sort(key=lambda x: x["index"])
         self.heroes[hero_type].auto_adjust_cur_equipment()
+        self.update_all_loadouts()
+
+    def remove_preset(self, preset_index: int):
+        preset = self.all_presets[preset_index]
+        base_offset = preset["offsets"]["base"]
+
+        if preset["counter"] == 0:
+            for p in self.all_presets:
+                p["counter"] -= 1
+        else:
+            self.unused_preset_slots.append(base_offset)
+        self.all_presets.remove(preset)
+        self._sort_preset()
+
+        # Patch globals.data
+        globals.data[base_offset] = 0x00  # Removed sign
+
+        # Update heroes
+        self.heroes[preset["hero_type"]].presets.remove(preset)
+        self.heroes[preset["hero_type"]].auto_adjust_cur_equipment()
         self.update_all_loadouts()
 
     def replace_vessel_relic(self, hero_type: int, vessel_id: int,

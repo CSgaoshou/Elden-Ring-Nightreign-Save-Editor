@@ -249,7 +249,7 @@ class ItemEntry:
     def __init__(self, data_bytes: bytearray):
         if len(data_bytes) != 14:
             raise ValueError("Invalid data length")
-        self.ga_handle = struct.unpack_from("<I", data_bytes, 0)[0]  # Combination of ItemType and Instance ID
+        self.ga_handle: int = struct.unpack_from("<I", data_bytes, 0)[0]  # Combination of ItemType and Instance ID
         self.type_bits = self.ga_handle & 0xF0000000
         self.instance_id = self.ga_handle & 0x00FFFFFF  # Tpye 'Goods' instance id is equal to goodsId
         self.item_amount = struct.unpack_from("<I", data_bytes, 4)[0]
@@ -506,6 +506,11 @@ class InventoryHandler:
     def parse(self):
         with self._lock:
             logger.info("Parsing inventory data")
+            # Backup equipment state
+            ga_to_equipped_by = {
+                entry.ga_handle: entry.equipped_by.copy() for entry in self.entries
+            }
+
             self.initialize()
             cur_offset = self.START_OFFEST
             state_ga_to_index = {}
@@ -548,6 +553,8 @@ class InventoryHandler:
                     self.ga_to_acquisition_id[entry.ga_handle] = entry.acquisition_id
                     self.relics[entry.ga_handle] = entry
                     self.relic_gas.append(entry.ga_handle)
+                    # Restore equipment state
+                    entry.equipped_by = ga_to_equipped_by.get(entry.ga_handle, [])
 
             count_in_data = struct.unpack_from("<I", globals.data, self.entry_count_offset)[0]
             if self.entry_count != count_in_data:
@@ -614,12 +621,15 @@ class InventoryHandler:
             self.parse()  # Just make sure everything is fine
             return True, self.entries[empty_entry_index].ga_handle
 
-    def remove_relic_from_inventory(self, ga_handel):
+    def remove_relic_from_inventory(self, ga_handle):
+        if self.get_relic_equipped_by(ga_handle):
+            raise ValueError("Cannot remove an equipped relic")
+
         with self._lock:
             logger.info("Removing relic from inventory")
             target_state_index = -1
             for i in range(self.STATE_SLOT_COUNT):
-                if self.states[i].ga_handle == ga_handel:
+                if self.states[i].ga_handle == ga_handle:
                     target_state_index = i
                     logger.info("Found relic at state index %d", target_state_index)
                     break
@@ -627,7 +637,7 @@ class InventoryHandler:
                 raise ValueError("Relic not found in inventory")
             target_entry_index = -1
             for i in range(self.ENTRY_SLOT_COUNT):
-                if self.entries[i].ga_handle == ga_handel:
+                if self.entries[i].ga_handle == ga_handle:
                     target_entry_index = i
                     logger.info("Found relic at entry index %d", target_entry_index)
                     break
@@ -657,7 +667,7 @@ class InventoryHandler:
             logger.info("Removed relic at state index %d", target_state_index)
             self._cur_last_state_index = target_state_index-1
             self.parse()  # Just make sure everything is fine
-            self.remove_illegal(ga_handel)
+            self.remove_illegal(ga_handle)
             return True
 
     def update_relic_state(self, state_index):

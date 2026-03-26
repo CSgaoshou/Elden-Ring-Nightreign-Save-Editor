@@ -250,3 +250,7 @@ msgstr "Deselect All"
 #, python-brace-format
 msgid "{selected_count} selected"
 msgstr "{selected_count} selected"
+
+#: Final.py:2785
+msgid "❌ Delete Preset"
+msgstr "❌ Delete Preset"
