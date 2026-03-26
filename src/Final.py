@@ -2834,12 +2834,12 @@ class SaveEditorGUI:
             return False
 
         master = master or self.root
-        vcmd = self.root.register(check_regex)
-        dialog = tk.Toplevel(self.root)
+        vcmd = master.register(check_regex)
+        dialog = tk.Toplevel(master)
         self.color_theme.apply(dialog)
         dialog.title("New Preset Name")
         lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
-        dialog.transient(self.root)
+        dialog.transient(master)
         dialog.grab_set()
 
         label = ttk.Label(
@@ -2859,7 +2859,7 @@ class SaveEditorGUI:
         name_entry.pack(pady=5, padx=10)
         name_entry.focus_set()
 
-        result: dict[str, str] = {"name": ""}  # Use a dict to pass value back
+        result = {"name": ""}  # Use a dict to pass value back
 
         def on_ok():
             result["name"] = name_entry.get().strip()
@@ -2896,7 +2896,7 @@ class SaveEditorGUI:
         dialog.geometry(f"+{x}+{y}")
         dialog.deiconify()
 
-        self.root.wait_window(dialog)
+        master.wait_window(dialog)
         return result["name"] if len(result["name"]) > 0 else None
 
     def edit_preset_relics(self, preset_info):
@@ -2965,19 +2965,19 @@ class SaveEditorGUI:
         left_panel.pack(side="left", fill="y", padx=10, pady=10)
         left_panel.pack_propagate(False)
 
-        def update_parent_with_grab():
-            self.refresh_presets()
-            if dialog.winfo_exists():
-                dialog.grab_set()
-
         # Header
         def on_header_click(_):
             new_name = self.ask_preset_name(dialog, preset["name"])
+            # Restore grab (modal state) to this dialog
+            # as the sub-dialog `ask_preset_name` stole it.
+            if dialog.winfo_exists():
+                dialog.grab_set()
+
             if not new_name:
                 return
             self.loadout_handler.rename_preset(preset["index"], new_name)
             header.config(text=f"{char_name} - {new_name}")
-            update_parent_with_grab()
+            self.refresh_presets()
 
         header = tk.Label(
             left_panel,
@@ -3226,16 +3226,11 @@ class SaveEditorGUI:
                 slot_relic_data[idx] = None
                 update_slot_display()
                 update_details_panel()
-                update_parent_with_grab()
+                self.refresh_presets()
             except Exception as e:
                 messagebox.showerror(
                     "Error", f"Failed to clear relic from preset:\n{e}"
                 )
-            # self.write_preset_relic(preset_offset, idx, 0)
-            # slot_relic_data[idx] = None
-            # update_slot_display()
-            # update_details_panel()
-            # self.refresh_presets()
 
         def edit_selected_relic():
             """Open the modify dialog for the relic in the selected slot"""
@@ -3247,9 +3242,6 @@ class SaveEditorGUI:
 
             ga = ga_handles[idx]
             real_id = relic_data.get("real_id", 0)
-
-            # Release grab so we can interact with the edit dialog
-            # dialog.grab_release()
 
             def refresh_after_edit():
                 # Refresh main inventory (this updates ga_relic)
@@ -3274,7 +3266,7 @@ class SaveEditorGUI:
                     slot_relic_data[idx] = new_relic_data
                     update_slot_display()
                     update_details_panel()
-                update_parent_with_grab()
+                self.refresh_presets()
 
             # Open or reuse modify dialog
             if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
@@ -3575,7 +3567,7 @@ class SaveEditorGUI:
                 update_slot_display()
                 update_details_panel()
                 populate_relic_list()  # Refresh list (color filter may change)
-                update_parent_with_grab()
+                self.refresh_presets()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to assign preset relic:\n{e}")
 

@@ -356,16 +356,7 @@ class VesselParser:
             p_start = cursor
 
             # Offsets for custom preset fields
-            p_offsets = {
-                "base": p_start,
-                "hero_type": p_start + 1,
-                "unknown_1": p_start + 2,
-                "counter": p_start + 3,
-                "name": p_start + 4,
-                "vessel_id": p_start + 44,  # 4 + 36 + 4 padding
-                "relics": p_start + 48,
-                "timestamp": p_start + 72  # not sure
-            }
+            p_offsets = calc_preset_offsets(p_start)
 
             cursor += 1
             h_id = int(struct.unpack_from("<B", globals.data, cursor)[0])
@@ -714,9 +705,7 @@ class LoadoutHandler:
             raise ValueError("Invalid preset index")
 
     def _sort_preset(self):
-        """Sort presets by offset, and ensure 0-counter preset at the end
-
-        *Note: Preset index will be rebuilt."""
+        """Sort presets by offset, and ensure 0-counter preset at the end."""
         if not self.all_presets:
             return
         self.all_presets.sort(key=lambda x: x["offsets"]["base"])
