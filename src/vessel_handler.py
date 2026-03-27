@@ -816,7 +816,8 @@ class LoadoutHandler:
         self._sort_preset()
 
         # Patch globals.data
-        globals.data[base_offset] = 0x00  # Removed sign
+        struct.pack_into("<B", globals.data, base_offset, 0)  # header = 0
+        struct.pack_into("<H", globals.data, base_offset + 1, 0)  # hero type = 0
 
         # Update heroes
         self.heroes[preset["hero_type"]].presets.remove(preset)
