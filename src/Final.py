@@ -415,9 +415,7 @@ def save_file():
 
     if MODE == "PC":
 
-        output_sl2_file = filedialog.asksaveasfilename(
-            initialfile="NR0000.sl2", title="Save PC SL2 save as"
-        )
+        output_sl2_file = filedialog.asksaveasfilename()
         if not output_sl2_file:
             return
 
