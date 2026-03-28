@@ -16,7 +16,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Elden_Ring_Save_Editor',
+    name='Nightreign_Relic_Editor',
     upx=True,
     console=False,
     windowed=True,
@@ -28,10 +28,10 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     upx=True,
-    name='Elden_Ring_Save_Editor',
+    name='Nightreign_Relic_Editor',
 )
 
 app = BUNDLE(
     coll,
-    name='Elden_Ring_Save_Editor_App.app',
+    name='Nightreign_Relic_Editor_App.app',
 )

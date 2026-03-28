@@ -13,28 +13,28 @@ jobs:
           - name: Windows 64-bit
             os: windows-latest
             spec: src/build.spec
-            artifact: Elden_Ring_Save_Editor_WIN64
+            artifact: Nightreign_Relic_Editor_WIN64
             artifact-path: dist/
           - name: Windows 32-bit
             os: windows-latest
             spec: src/build_win32.spec
-            artifact: Elden_Ring_Save_Editor_WIN32
-            artifact-path: dist/Elden_Ring_Save_Editor_WIN32.exe
+            artifact: Nightreign_Relic_Editor_WIN32
+            artifact-path: dist/Nightreign_Relic_Editor_WIN32.exe
             uv-python: cpython-3.14-windows-i686
           - name: Linux x86_64
             os: ubuntu-latest
             spec: src/build.spec
-            artifact: Elden_Ring_Save_Editor_LINUX_x86_64
+            artifact: Nightreign_Relic_Editor_LINUX_x86_64
             artifact-path: dist/
           - name: macOS Silicon
             os: macos-latest
             spec: src/build_mac.spec
-            artifact: Elden_Ring_Save_Editor_MAC-Silicon
+            artifact: Nightreign_Relic_Editor_MAC-Silicon
             artifact-path: dist/*.app
           - name: macOS Intel
             os: macos-15-intel
             spec: src/build_mac.spec
-            artifact: Elden_Ring_Save_Editor_MAC-Intel
+            artifact: Nightreign_Relic_Editor_MAC-Intel
             artifact-path: dist/*.app
     runs-on: ${{ matrix.os }}
     steps:
