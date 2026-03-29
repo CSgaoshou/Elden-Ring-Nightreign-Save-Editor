@@ -34,6 +34,28 @@ def df_filter_zero_chanceWeight(effects: pd.DataFrame) -> pd.DataFrame:
     return _effs
 
 
+@functools.cache
+def _get_name_wrapper(table_type: Literal["effect", "relic"], item_id: int):
+    match table_type:
+        case "effect":
+            name_df = SourceDataHandler().effect_name
+        case "relic":
+            name_df = SourceDataHandler().relic_name
+        case _:
+            raise ValueError(f"Unknown table type: {table_type}")
+    if name_df is None:
+        raise RuntimeError(f"The {table_type} table is not currently initialized")
+    row = name_df[name_df["id"] == item_id]
+    if row.empty:
+        return "Unknown"
+    val = row["text"].iloc[0]
+    return str(val) if val is not None else "Unknown"
+
+
+def get_name(table_type: Literal["effect", "relic"], item_id: int):
+    return _get_name_wrapper(table_type, item_id)
+
+
 class AttachEffect:
     def __init__(self, effect_df: pd.DataFrame, name_df: pd.DataFrame, effect_id: int):
         self._data_frame = effect_df[effect_df.index == effect_id]
@@ -46,18 +68,9 @@ class AttachEffect:
     def name(self):
         if self._is_empty_id:
             return "Empty"
-        elif self._is_unknown:
+        if self._is_unknown:
             return "Unknown"
-        else:
-            try:
-                row = self._name_df[self._name_df["id"] == self.text_id]
-                if not row.empty:
-                    text = row["text"].values[0]
-                    text = " ".join(text.split("\n"))
-                    return text
-                return "Unknown"
-            except Exception:
-                return "Unknown"
+        return get_name("effect", self.text_id)
 
     @property
     def conflict_id(self):
@@ -106,16 +119,9 @@ class Relic:
     def name(self):
         if self._is_empty_id:
             return "Empty"
-        elif self._is_unknown:
+        if self._is_unknown:
             return "Unknown"
-        else:
-            try:
-                row = self._name_df[self._name_df["id"] == self.id]
-                if not row.empty:
-                    return row["text"].values[0]
-                return "Unknown"
-            except Exception:
-                return "Unknown"
+        return get_name("relic", self.id)
 
     @property
     def color(self):
