@@ -27,6 +27,7 @@ import struct
 import sys
 import threading
 import tkinter as tk
+import traceback
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -595,8 +596,6 @@ def save_file():
                 f"Unexpected error occurred:\n{str(e)}\n\n"
                 f"Check console for details.",
             )
-            import traceback
-
             traceback.print_exc()
     return True
 
@@ -629,14 +628,10 @@ def name_to_path():
             print(f"Error parsing save file {file_path}: Data structure error - {e}")
             print(f"  This may indicate a corrupted save file or incompatible format")
         except IndexError as e:
-            import traceback
-
             traceback.print_exc()
             print(f"Error parsing save file {file_path}: Index error - {e}")
             print(f"  This may indicate a corrupted save file")
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             print(f"Error reading {file_path}: {e}")
 
@@ -1907,8 +1902,6 @@ class SaveEditorGUI:
                 self.on_character_click(last_char_index, path, name)
 
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             logger.error(f"Could not auto-load last file: {e}")
 
@@ -5111,8 +5104,6 @@ class SaveEditorGUI:
                 f"Try deleting some relics in-game and saving again.",
             )
         except IndexError as e:
-            import traceback
-
             traceback.print_exc()
             messagebox.showerror(
                 "Error",
@@ -5122,8 +5113,6 @@ class SaveEditorGUI:
                 f"Check the console for detailed error location.",
             )
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to load character: {str(e)}")
 
@@ -8761,9 +8750,21 @@ class LoadoutSelector(tk.Toplevel):
         return self.selected_vessels, self.selected_presets
 
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    # Handle KeyboardInterrupt for a exit
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    traceback.print_exc()
+    logging.exception("Caught unhandled exception")
+    messagebox.showerror("Error", f"A fatal error occurred: {exc_value}")
+
+
 def main():
     root = tk.Tk()
     app = SaveEditorGUI(root)
+    root.report_callback_exception = handle_exception
     root.mainloop()
 
 
