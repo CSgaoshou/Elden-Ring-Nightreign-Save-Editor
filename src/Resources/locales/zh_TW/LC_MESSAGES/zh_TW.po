@@ -178,10 +178,6 @@ msgstr "📥 從 Excel 匯入"
 msgid "🗑️ Delete All Illegal"
 msgstr "🗑️ 刪除所有非法遺物"
 
-#: Final.py:4545
-msgid "🗑️ Mass Delete Selected"
-msgstr "🗑️ 批量刪除已選項目"
-
 #: Final.py:4551
 msgid "🔧 Mass Fix"
 msgstr "🔧 批量修正"

@@ -178,10 +178,6 @@ msgstr "📥 Import from Excel"
 msgid "🗑️ Delete All Illegal"
 msgstr "🗑️ Delete All Illegal"
 
-#: Final.py:4545
-msgid "🗑️ Mass Delete Selected"
-msgstr "🗑️ Mass Delete Selected"
-
 #: Final.py:4551
 msgid "🔧 Mass Fix"
 msgstr "🔧 Mass Fix"

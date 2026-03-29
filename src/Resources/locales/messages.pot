@@ -178,10 +178,6 @@ msgstr ""
 msgid "🗑️ Delete All Illegal"
 msgstr ""
 
-#: Final.py:4545
-msgid "🗑️ Mass Delete Selected"
-msgstr ""
-
 #: Final.py:4551
 msgid "🔧 Mass Fix"
 msgstr "🔧 Mass Fix"
