@@ -1704,7 +1704,7 @@ class SaveEditorGUI:
         self.empty_img = ImageTk.PhotoImage(Image.new("RGBA", (16, 16), (0, 0, 0, 0)))
 
         self.root = root
-        self.root.title("Elden Ring NightReign Save Editor")
+        self.root.title("Elden Ring Nightreign Save Editor")
         self.root.geometry("1080x700")
 
         # Modify dialog reference
@@ -1927,10 +1927,10 @@ class SaveEditorGUI:
 
         ft_info_label = ttk.Label(
             file_frame,
-            text="Load your Elden Ring NightReign save file to begin editing",
+            text="Load your Elden Ring Nightreign save file to begin editing",
             style="Seconary.TLabel",
         )
-        lang_mgr.register(ft_info_label, N_("Load your Elden Ring NightReign save file to begin editing"))
+        lang_mgr.register(ft_info_label, N_("Load your Elden Ring Nightreign save file to begin editing"))
         ft_info_label.pack(pady=(0, 10))
 
         ft_btn_open = ttk.Button(

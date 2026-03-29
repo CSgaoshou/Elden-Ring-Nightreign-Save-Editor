@@ -31,7 +31,7 @@ msgid "Save File Management"
 msgstr "存檔管理"
 
 #: Final.py:1915
-msgid "Load your Elden Ring NightReign save file to begin editing"
+msgid "Load your Elden Ring Nightreign save file to begin editing"
 msgstr "載入您的《艾爾登法環:暗夜君臨》存檔以開始編輯"
 
 #: Final.py:1921
