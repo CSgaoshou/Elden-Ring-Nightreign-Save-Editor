@@ -1692,7 +1692,7 @@ class SaveEditorGUI:
     relic_checker: Optional[RelicChecker] = None
     config = ConfigManager()
 
-    def __init__(self, root):
+    def __init__(self, root: tk.Tk):
         self.color_theme = ColorTheme()
 
         self.game_data = SourceDataHandler()
@@ -1714,9 +1714,6 @@ class SaveEditorGUI:
 
         # Modify dialog reference
         self.modify_dialog = None
-
-        # Clipboard for copy/paste relic effects
-        self.clipboard_effects = None  # Will store (effects, item_id, item_name)
 
         # Track last selected character index for config saving
         self.last_char_index = None
@@ -3884,64 +3881,66 @@ class SaveEditorGUI:
     def show_vessel_context_menu(self, event, vessel_slot):
         """Show context menu for vessel relic slot"""
 
-        def clear_relic(slot_index):
+        def clear_relic(*slot_indexes: int):
             hero_type = self.vessel_char_combo.current() + 1
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
-            self.loadout_handler.replace_vessel_relic(
-                hero_type, vessel_id, slot_index, 0
-            )
+            for slot_index in slot_indexes:
+                self.loadout_handler.replace_vessel_relic(
+                    hero_type, vessel_id, slot_index, 0
+                )
             self.refresh_inventory_and_vessels()
 
         # Get vessel data
-        tree = self.vessel_trees[vessel_slot]
+        tree: ttk.Treeview = self.vessel_trees[vessel_slot]
+        selection = tree.selection()
 
         # Identify which row was clicked
-        item = tree.identify_row(event.y)
-        if not item:
+        target = tree.identify_row(event.y)
+        if not target:
             return
 
-        # Select the clicked row
-        tree.selection_set(item)
+        if target not in selection:
+            # Single select the clicked row
+            tree.selection_set(target)
+            selection = (target,)
 
         # Get the slot index (1-based from display, convert to 0-based)
-        values = tree.item(item, "values")
-        if not values:
-            return
-
-        slot_index = int(values[0]) - 1  # Convert from 1-based to 0-based
-        relic_color = values[2]  # Color column
-        relic_name = values[3]  # Name column
-
-        # Check if slot has a relic (not empty)
-        has_relic = relic_name != "(Empty)" and relic_name != "-"
+        values = [tree.item(item, "values") for item in selection]
+        # Convert from 1-based to 0-based
+        slot_indexes = [int(value[0]) - 1 for value in values]
+        relic_colors = [value[2] for value in values]
+        relic_names = [value[3] for value in values]
+        empty_slots = [name in ("(Empty)", "-") for name in relic_names]
 
         # Create context menu
         menu = tk.Menu(tree, tearoff=0)
 
-        if has_relic:
+        if len(selection) == 1:
+            index = slot_indexes[0]
             menu.add_command(
-                label=f"Replace Relic ({relic_color})",
-                command=lambda: self.open_replace_relic_dialog(vessel_slot, slot_index),
+                label="Assign Relic" if empty_slots[0] else "Replace Relic",
+                command=lambda: self.open_replace_relic_dialog(vessel_slot, index),
             )
+            if not empty_slots[0]:
+                menu.add_command(
+                    label="Edit Relic",
+                    command=lambda: self.open_edit_relic_dialog(vessel_slot, index),
+                )
+        if not all(empty_slots):
             menu.add_command(
-                label="📋 Copy Relic Effects",
-                command=lambda: self.copy_vessel_relic_effects(vessel_slot, slot_index),
+                label="Clear Relic",
+                command=lambda: clear_relic(*slot_indexes),
             )
-            menu.add_command(
-                label="Edit Relic",
-                command=lambda: self.open_edit_relic_dialog(vessel_slot, slot_index),
-            )
-            menu.add_command(
-                label="Clear Relic", command=lambda: clear_relic(slot_index)
-            )
-        else:
-            # Empty slot - allow assigning a relic (we know slot color from vessel data)
-            menu.add_command(
-                label=f"Assign Relic ({relic_color})",
-                command=lambda: self.open_replace_relic_dialog(vessel_slot, slot_index),
-            )
+        menu.add_command(
+            label="📋 Copy Effects",
+            command=lambda: self.copy_vessel_relic_effects(vessel_slot, *slot_indexes),
+        )
+        menu.add_command(
+            label="📋 Paste Effects",
+            command=lambda: self.paste_vessel_relic_effects(vessel_slot, *slot_indexes),
+        )
 
         # Show the menu
         menu.tk_popup(event.x_root, event.y_root)
@@ -4431,7 +4430,7 @@ class SaveEditorGUI:
         except Exception:
             messagebox.showerror("Error", "Could not find relic data")
 
-    def copy_vessel_relic_effects(self, vessel_slot, slot_index):
+    def copy_vessel_relic_effects(self, vessel_slot, *slot_indexes):
         """Copy effects from a relic in a vessel slot to clipboard"""
         char_name = self.vessel_char_var.get()
         char_id = (
@@ -4444,30 +4443,38 @@ class SaveEditorGUI:
             messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
-        # Get the GA handle for this slot
+        # Get the GA handles for these slots
         vessel_id = self.loadout_handler.get_vessel_id(hero_type, vessel_slot)
-        ga_handle = self.loadout_handler.get_relic_ga_handle(
-            hero_type, vessel_id, slot_index
+        ga_handles = [
+            self.loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
+            for slot_index in slot_indexes
+        ]
+        # Exclude empty slots
+        ga_handles = [ga_handle for ga_handle in ga_handles if ga_handle != 0]
+        self.copy_relic_effects(ga_handles)
+
+    def paste_vessel_relic_effects(self, vessel_slot, *slot_indexes):
+        """Paste effects from a relic in a vessel slot to clipboard"""
+        char_name = self.vessel_char_var.get()
+        char_id = (
+            self.game_data.character_names.index(char_name)
+            if char_name in self.game_data.character_names
+            else -1
         )
-        if ga_handle == 0:
-            messagebox.showwarning("Warning", "Empty slot - no relic to copy")
+        hero_type = char_id + 1
+        if char_id < 0:
+            messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
-        try:
-            relic = self.inventory_handler.relics[ga_handle]
-            effects = relic.state.effects_and_curses[:3]
-            real_id = relic.state.real_item_id
-            _item = self.game_data.relics.get(real_id)
-            item_name = _item.name if _item else f"Unknown ({real_id})"
-            self.clipboard_effects = (effects, real_id, item_name)
-
-            effect_count = len([e for e in effects if e != 0])
-            messagebox.showinfo(
-                "Copied",
-                f"Copied effects from:\n{item_name}\n\nEffects: {effect_count} effect(s)",
-            )
-        except Exception:
-            messagebox.showerror("Error", "Could not find relic data")
+        # Get the GA handles for these slots
+        vessel_id = self.loadout_handler.get_vessel_id(hero_type, vessel_slot)
+        ga_handles = [
+            self.loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
+            for slot_index in slot_indexes
+        ]
+        # Exclude empty slots
+        ga_handles = [ga_handle for ga_handle in ga_handles if ga_handle != 0]
+        self.paste_relic_effects(ga_handles)
 
     def save_loadout(self):
         """Save the current character's loadout to a JSON file"""
@@ -5651,18 +5658,15 @@ class SaveEditorGUI:
             font=("Arial", 9, "bold"),
             command=self.delete_selected_relic,
         )
-        if len(selections) == 1:
-            menu.add_separator()
-            menu.add_command(label="📋 Copy Effects", command=self.copy_relic_effects)
-            # Only enable paste if we have something in clipboard
-            paste_label = "📋 Paste Effects"
-            if self.clipboard_effects:
-                paste_label += f" (from {self.clipboard_effects[2]})"
-            menu.add_command(
-                label=paste_label,
-                command=self.paste_relic_effects,
-                state="normal" if self.clipboard_effects else "disabled",
-            )
+        menu.add_separator()
+        menu.add_command(
+            label="📋 Copy Effects",
+            command=self.copy_selected_relic_effects,
+        )
+        menu.add_command(
+            label="📋 Paste Effects",
+            command=self.paste_selected_relic_effects,
+        )
         menu.post(event.x_root, event.y_root)
 
     def toggle_favorite(self):
@@ -5677,98 +5681,151 @@ class SaveEditorGUI:
 
         self.run_task_async(task, callback=self.refresh_inventory_and_vessels)
 
-    def copy_relic_effects(self):
+    def copy_relic_effects(self, ga_handles: list[int]):
+        relics = [self.inventory_handler.relics[ga] for ga in ga_handles]
+        unique_relics = [relic for relic in relics if relic.state.is_unique]
+        unique_names = [relic.state.name for relic in unique_relics]
+        unique_list_msg = "  - " + "\n  - ".join(unique_names)
+        if len(unique_relics) > 0:
+            if not messagebox.askyesno(
+                "Warning",
+                "Your selection includes following unique relics:\n\n"
+                f"{unique_list_msg}\n\n"
+                "which may contain invalid effects.\n\n"
+                "Do you still want to copy them?",
+                icon="warning",
+            ):
+                return
+
+        # We allow pasting effects between normal and deep relics.
+        # However, doing so often creates invalid that cannot be auto-fixed.
+        # Therefore, we sort them by type (normal/deep) here
+        # to minimize the chance of such unresolvable cases.
+        relics.sort(key=lambda x: x.state.is_deep)
+
+        try:
+            effects_string = self.inventory_handler.stringify_relic_effects(
+                [relic.ga_handle for relic in relics]
+            )
+            self.root.clipboard_clear()
+            self.root.clipboard_append(effects_string)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to copy effects: {e}")
+
+    def paste_relic_effects(self, ga_handles: list[int]):
+        relics = [self.inventory_handler.relics[ga] for ga in ga_handles]
+        unique_relics = [relic for relic in relics if relic.state.is_unique]
+        unique_names = [relic.state.name for relic in unique_relics]
+        unique_list_msg = "  - " + "\n  - ".join(unique_names)
+        if len(unique_relics) > 0:
+            if not messagebox.askyesno(
+                "Warning",
+                "Your selection includes following unique relics:\n\n"
+                f"{unique_list_msg}\n\n"
+                "Editing unique items is NOT recommended and may result in a ban.\n\n"
+                "Do you still want to paste the effects?",
+                icon="warning",
+            ):
+                return
+
+        # Sort by type (normal/deep) to mirror the copy phase.
+        relics.sort(key=lambda x: x.state.is_deep)
+
+        try:
+            clipboard = self.root.clipboard_get()
+            effects_lines = self.inventory_handler.parse_effects(clipboard)
+        except tk.TclError as e:
+            messagebox.showerror("Error", f"Failed to read clipboard: {e}")
+            return
+        except ValueError as e:
+            messagebox.showerror("Error", f"Failed to parse clipboard: {e}")
+            return
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to paste effects: {e}")
+            return
+
+        # Ensure the number of copied items matches the selection
+        if len(effects_lines) == 1:
+            # If the effects of a single relic are copied, apply to all selected items
+            effects_lines = [effects_lines[0]] * len(relics)
+        elif len(effects_lines) != len(relics):
+            messagebox.showerror(
+                "Error",
+                f"Failed to paste effects.\n\n"
+                f"Count mismatch: You copied {len(effects_lines)} effect(s), "
+                f"but selected {len(relics)} item(s) to paste into.",
+            )
+            return
+        count = len(relics)
+
+        if not messagebox.askyesno(
+            "Confirm Paste",
+            f"Are you sure to paste effects into {count} relics?",
+        ):
+            return
+
+        success_count = 0
+        error_count = 0
+        last_reason = ""
+
+        def task():
+            nonlocal success_count, error_count, last_reason
+
+            for i in range(count):
+                ga_handle = relics[i].ga_handle
+                effects = effects_lines[i]
+                try:
+                    self.inventory_handler.modify_relic(ga_handle, None, *effects)
+                    success_count += 1
+                except Exception as e:
+                    error_count += 1
+                    last_reason = str(e)
+            self.mass_fix_incorrect_ids(silent=True)
+
+        def complete():
+            if success_count > 0:
+                if error_count > 1:
+                    messagebox.showwarning(
+                        "Warning", f"{success_count} succeed\n{error_count} failed."
+                    )
+                elif error_count == 1:
+                    messagebox.showwarning(
+                        "Warning",
+                        f"{success_count} succeed\n{error_count} failed: {last_reason}",
+                    )
+                else:
+                    msg_info("Success", f"Effects pasted to {success_count} relics")
+            else:
+                if error_count > 1:
+                    messagebox.showerror("Error", "Failed to paste effects.")
+                elif error_count == 1:
+                    messagebox.showerror(
+                        "Error", f"Failed to paste effects: {last_reason}"
+                    )
+            self.refresh_inventory_and_vessels()
+
+        self.run_task_async(task, callback=complete)
+
+    def copy_selected_relic_effects(self):
         """Copy effects from selected relic to clipboard"""
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
+            msg_warning("Warning", "No relic selected")
             return
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        self.copy_relic_effects(ga_handles)
 
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        item_id = int(tags[1])
-
-        # Find the relic data
-
-        try:
-            real_id = self.inventory_handler.relics[ga_handle].state.real_item_id
-            effects = self.inventory_handler.relics[ga_handle].state.effects_and_curses
-            _item = self.game_data.relics.get(item_id)
-            item_name = _item.name if _item else f"Unknown ({item_id})"
-            self.clipboard_effects = (effects, real_id, item_name)
-            messagebox.showinfo(
-                "Copied",
-                f"Copied effects from:\n{item_name}\n\nEffects: {len([e for e in effects if e != 0])} effect(s)",
-            )
-            return
-        except KeyError:
-            messagebox.showerror("Error", "Could not find relic data")
-
-    def paste_relic_effects(self):
+    def paste_selected_relic_effects(self):
         """Paste copied effects to selected relic"""
-        if not self.clipboard_effects:
-            messagebox.showwarning(
-                "Warning",
-                "No effects copied. Right-click a relic and select 'Copy Effects' first.",
-            )
-            return
-
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
+            msg_warning("Warning", "No relic selected")
             return
 
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        item_id = int(tags[1])
-
-        # Get target relic info
-        target_name = self.game_data.relics[item_id].name
-        source_effects, source_id, source_name = self.clipboard_effects
-
-        # Build effect names for display
-        effect_names = []
-        for eff_id in source_effects:
-            if eff_id != 0:
-                eff = self.game_data.effects.get(eff_id)
-                eff_name = eff.name if eff else f"Unknown ({eff_id})"
-                effect_names.append(eff_name)
-
-        # Confirm paste
-        msg = f"Paste effects from:\n  {source_name}\n\nTo:\n  {target_name}\n\n"
-        msg += f"Effects to paste ({len(effect_names)}):\n"
-        for name in effect_names[:6]:
-            msg += f"  • {name}\n"
-        msg += "\nProceed?"
-
-        if not messagebox.askyesno("Confirm Paste", msg):
-            return
-
-        # Check if this would make the relic illegal
-        if self.relic_checker:
-            would_be_illegal = self.relic_checker.check_invalidity(
-                item_id, source_effects
-            )
-            if would_be_illegal:
-                warn_msg = (
-                    "⚠️ Warning: These effects may not be valid for this relic type.\n\n"
-                )
-                warn_msg += "The relic may be flagged as illegal after pasting.\n\nContinue anyway?"
-                if not messagebox.askyesno(
-                    "Invalid Effects Warning", warn_msg, icon="warning"
-                ):
-                    return
-
-        # Apply the effects
-        try:
-            if self.inventory_handler.modify_relic(ga_handle, item_id, *source_effects):
-                msg_info("Success", f"Effects pasted to {target_name}")
-                self.refresh_inventory_and_vessels()
-                save_current_data()
-        except Exception as e:
-            messagebox.showerror("Error", "Failed to paste effects:\n" + str(e))
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        self.paste_relic_effects(ga_handles)
 
     def modify_selected_relic(self):
         selection = self.tree.selection()
@@ -5890,7 +5947,7 @@ class SaveEditorGUI:
         self.tree.selection_remove(self.tree.selection())
         self.tree.selection_set(new_selection)
 
-    def mass_fix_incorrect_ids(self):
+    def mass_fix_incorrect_ids(self, silent=False):
         """Find and fix all problematic relics (illegal and strict invalid)"""
         global userdata_path
 
@@ -6074,7 +6131,7 @@ class SaveEditorGUI:
                 if len(unfixable_relics) > 5:
                     msg += f"... and {len(unfixable_relics) - 5} more\n"
                 msg += "\nThese may need manual effect changes."
-            messagebox.showinfo("Mass Fix", msg)
+            silent or messagebox.showinfo("Mass Fix", msg)
             return
 
         # Show confirmation with details
@@ -6108,7 +6165,7 @@ class SaveEditorGUI:
 
         details += "\n\nProceed with fixing these relics?"
 
-        result = messagebox.askyesno("Confirm Mass Fix", details)
+        result = silent or messagebox.askyesno("Confirm Mass Fix", details)
         if not result:
             return
 
@@ -6158,8 +6215,9 @@ class SaveEditorGUI:
         if failed_count > 0:
             message += f"\n\n{failed_count} failed to fix"
 
-        messagebox.showinfo("Mass Fix Complete", message)
-        self.refresh_inventory_lightly()
+        if not silent:
+            messagebox.showinfo("Mass Fix Complete", message)
+            self.refresh_inventory_lightly()
 
     def add_relic_tk(self):
         if globals.data is None:

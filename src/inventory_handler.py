@@ -120,6 +120,26 @@ class ItemState:
         self.durability = self.item_id
 
     @property
+    def relic(self):
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return SourceDataHandler().relics[self.real_item_id]
+
+    @property
+    def name(self) -> str:
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.relic.name
+
+    @property
+    def is_unique(self):
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.real_item_id in UNIQUENESS_IDS
+
+    @property
+    def is_deep(self) -> bool:
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.relic.is_deep()
+
+    @property
     def durability(self):
         if self.type_bits != ITEM_TYPE_RELIC:
             return None
@@ -794,6 +814,32 @@ class InventoryHandler:
             return self.relics[ga_handle].is_favorite
         except KeyError:
             raise ValueError("Relic not found in inventory")
+
+    def stringify_relic_effects(self, ga_handles: list[int]):
+        output = ""
+        for ga_handle in ga_handles:
+            relic = self.relics[ga_handle].state
+            effects = [
+                -1 if eff in (0, 0xFFFFFFFF) else eff
+                for eff in relic.effects_and_curses
+            ]
+            output += " | ".join(str(eff) for eff in effects) + "\n"
+        return output.strip()
+
+    def parse_effects(self, effects_string: str) -> list[list[int]]:
+        result = []
+        lines = effects_string.strip().split("\n")
+        for n, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            effects = [
+                0xFFFFFFFF if int(eff) == -1 else int(eff) for eff in line.split("|")
+            ]
+            if len(effects) != 6:
+                raise ValueError(f"Not enough effects (line: {n+1})")
+            result.append(effects)
+        return result
 
     def refresh_relics_dataframe(self):
         cols = ['ga_handle', 'relic_id', 'effect_1', 'effect_2', 'effect_3',
