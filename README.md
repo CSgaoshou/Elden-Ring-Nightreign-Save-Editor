@@ -1,3 +1,5 @@
+#注意：该项目已经废弃，相关代码已经被合并#
+
 Original address: https://github.com/alfizari/Elden-Ring-Nightreign-Save-Editor. Since some features were missing, I made my own modifications.
 
 (原地址：https://github.com/alfizari/Elden-Ring-Nightreign-Save-Editor.  因为一些功能没有，所以我自己做了修改)
