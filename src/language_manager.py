@@ -106,8 +106,8 @@ class LanguageManager:
         """
         Loads the .mo file and triggers a UI refresh for all registered widgets.
         """
-        logger.warning(f"Loading language: {lang_code}")
-        logger.warning(f"Localedir: {localedir}")
+        logger.info(f"Loading language: {lang_code}")
+        logger.info(f"Localedir: {localedir}")
         try:
             # Create translation object and install _() into builtins
             trans = gettext.translation(
