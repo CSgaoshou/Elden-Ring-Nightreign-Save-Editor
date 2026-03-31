@@ -35,7 +35,7 @@ def df_filter_zero_chanceWeight(effects: pd.DataFrame) -> pd.DataFrame:
 
 
 @functools.cache
-def _get_name_wrapper(table_type: Literal["effect", "relic"], item_id: int):
+def _get_name_wrapped(table_type: Literal["effect", "relic"], item_id: int):
     match table_type:
         case "effect":
             name_df = SourceDataHandler().effect_name
@@ -53,7 +53,7 @@ def _get_name_wrapper(table_type: Literal["effect", "relic"], item_id: int):
 
 
 def get_name(table_type: Literal["effect", "relic"], item_id: int):
-    return _get_name_wrapper(table_type, item_id)
+    return _get_name_wrapped(table_type, item_id)
 
 
 class AttachEffect:
@@ -614,18 +614,9 @@ class SourceDataHandler:
         logger.debug(f"Getting rollable effects for {pool_type} pool")
         return self._get_rollable_effects_wrapped(pool_type)
 
-    def get_pool_rollable_effects(self, pool_id: int):
-        """Get effects that can actually roll in a pool (chanceWeight != 0).
-
-        Effects with weight -65536 are disabled (cannot roll).
-        Effects with weight 0 are class-specific effects that cannot naturally roll.
-        Other weights (including other negative values) are valid rollable weights.
-
-        For deep pools (2000000, 2100000, 2200000), returns effects that have
-        rollable weight in ANY of the three deep pools, since the game appears
-        to allow effects to roll on any deep relic if they're valid in any deep pool.
-        """
-        logger.debug(f"Getting rollable effects for pool {pool_id}")
+    @functools.cache
+    def _get_pool_rollable_effects_wrapped(self, pool_id: int):
+        logger.debug(f"Caching rollable effects for pool {pool_id}")
         if pool_id == -1:
             return []
 
@@ -643,6 +634,29 @@ class SourceDataHandler:
         _effects = df_filter_zero_chanceWeight(_effects)
         return _effects["attachEffectId"].values.tolist()
 
+    def get_pool_rollable_effects(self, pool_id: int):
+        """Get effects that can actually roll in a pool (chanceWeight != 0).
+
+        Effects with weight -65536 are disabled (cannot roll).
+        Effects with weight 0 are class-specific effects that cannot naturally roll.
+        Other weights (including other negative values) are valid rollable weights.
+
+        For deep pools (2000000, 2100000, 2200000), returns effects that have
+        rollable weight in ANY of the three deep pools, since the game appears
+        to allow effects to roll on any deep relic if they're valid in any deep pool.
+        """
+        logger.debug(f"Getting rollable effects for pool {pool_id}")
+        return self._get_pool_rollable_effects_wrapped(pool_id)
+
+    @functools.cache
+    def _get_pool_effects_strict_wrapped(self, pool_id: int):
+        logger.debug(f"Caching strict effects for pool {pool_id}")
+        if pool_id == -1:
+            return []
+        _effects = self.effect_table[self.effect_table["ID"] == pool_id]
+        _effects = df_filter_zero_chanceWeight(_effects)
+        return _effects["attachEffectId"].values.tolist()
+
     def get_pool_effects_strict(self, pool_id: int):
         """Get effects that can roll in a SPECIFIC pool (chanceWeight != 0).
 
@@ -651,11 +665,7 @@ class SourceDataHandler:
         deep pool but not in the specific pool assigned to a relic.
         """
         logger.debug(f"Getting strict effects for pool {pool_id}")
-        if pool_id == -1:
-            return []
-        _effects = self.effect_table[self.effect_table["ID"] == pool_id]
-        _effects = df_filter_zero_chanceWeight(_effects)
-        return _effects["attachEffectId"].values.tolist()
+        return self._get_pool_effects_strict_wrapped(pool_id)
 
     def get_effect_pools(self, effect_id: int):
         """Get all pool IDs that contain a specific effect."""
@@ -663,13 +673,18 @@ class SourceDataHandler:
         _pools = self.effect_table[self.effect_table["attachEffectId"] == effect_id]
         return _pools["ID"].values.tolist()
 
-    def get_effect_rollable_pools(self, effect_id: int):
-        """Get all pool IDs where this effect can actually roll (chanceWeight != 0)."""
-        logger.debug(f"Getting rollable pools for effect {effect_id}")
+    @functools.cache
+    def _get_effect_rollable_pools_wrapped(self, effect_id: int):
+        logger.debug(f"Caching rollable pools for effect {effect_id}")
         _rows = self.effect_table[self.effect_table["attachEffectId"] == effect_id]
         # Filter out rows where chanceWeight is 0 (cannot roll)
         _rollable = df_filter_zero_chanceWeight(_rows)
         return _rollable["ID"].values.tolist()
+
+    def get_effect_rollable_pools(self, effect_id: int):
+        """Get all pool IDs where this effect can actually roll (chanceWeight != 0)."""
+        logger.debug(f"Getting rollable pools for effect {effect_id}")
+        return self._get_effect_rollable_pools_wrapped(effect_id)
 
     def is_deep_only_effect(self, effect_id: int):
         """Check if an effect only exists in deep relic pools (2000000, 2100000, 2200000)
