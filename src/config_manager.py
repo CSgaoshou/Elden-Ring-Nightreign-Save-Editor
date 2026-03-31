@@ -43,7 +43,7 @@ class ConfigManager:
             "last_char_index": 0,
             "last_mode": None,
             "language": get_system_language(),
-            "theme": "dark",
+            "theme": "Dark",
             "auto_backup": True,
             "max_backups": 5,
             "reduce_message_pop": True
