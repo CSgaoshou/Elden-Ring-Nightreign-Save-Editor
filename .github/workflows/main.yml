@@ -1,9 +1,14 @@
 name: BUILDBOT
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -14,47 +19,141 @@ jobs:
             os: windows-latest
             spec: src/build.spec
             artifact: Nightreign_Relic_Editor_WIN64
-            artifact-path: dist/
+            artifact-path: dist/*
+            uv-python: 3.14
+
+          - name: Windows 64-bit Onedir
+            os: windows-latest
+            spec: src/build_win64_onedir.spec
+            artifact: Nightreign_Relic_Editor_WIN64_Onedir
+            artifact-path: dist/*
+            uv-python: 3.14
+
           - name: Windows 32-bit
             os: windows-latest
             spec: src/build_win32.spec
             artifact: Nightreign_Relic_Editor_WIN32
-            artifact-path: dist/Nightreign_Relic_Editor_WIN32.exe
+            artifact-path: dist/*
             uv-python: cpython-3.14-windows-i686
+
           - name: Linux x86_64
             os: ubuntu-latest
             spec: src/build.spec
             artifact: Nightreign_Relic_Editor_LINUX_x86_64
-            artifact-path: dist/
+            artifact-path: dist/*
+            uv-python: 3.14
+
           - name: macOS Silicon
             os: macos-latest
             spec: src/build_mac.spec
             artifact: Nightreign_Relic_Editor_MAC-Silicon
             artifact-path: dist/*.app
+            uv-python: 3.14
+
           - name: macOS Intel
             os: macos-15-intel
             spec: src/build_mac.spec
             artifact: Nightreign_Relic_Editor_MAC-Intel
             artifact-path: dist/*.app
+            uv-python: 3.14
+
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
+
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+
       - name: Setup MSVC for Win32
         if: matrix.name == 'Windows 32-bit'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x86
+
       - name: Install Dependencies
         run: uv sync ${{ matrix.uv-python && format('--python {0}', matrix.uv-python) || '' }}
+
       - name: Build Executable
         run: uv run pyinstaller ${{ matrix.spec }}
+
       - name: Upload Artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact-path }}
+
+  check:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check_tag.outputs.exists }}
+      newtag: ${{ steps.get_version.outputs.newtag}}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Get Version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(python -c "import pathlib, re; content = pathlib.Path('pyproject.toml').read_text(); print(re.search(r'version\s*=\s*[\" \']([^\" \']+)[\" \']', content).group(1))")
+          echo "newtag=V$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.get_version.newtag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Git Tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.get_version.newtag }}
+          git push origin ${{ steps.get_version.newtag }}
+
+  release:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./artifacts
+
+      - name: Display files
+        run: ls ./artifacts
+
+      - name: Zip folders
+        run: |
+          cd artifacts
+          for dir in */; do
+            dir="${dir%/}"
+            zipname="$dir.zip"
+            echo "Zipping $dir into $zipname"
+            (cd "$dir" && zip -r "../$zipname" .)
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.newtag }}
+          name: ${{ needs.check.outputs.newtag }}
+          generate_release_notes: false
+          draft: true
+          prerelease: false
+          files: ./artifacts/*.zip

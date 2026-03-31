@@ -33,5 +33,5 @@ coll = COLLECT(
 
 app = BUNDLE(
     coll,
-    name='Nightreign_Relic_Editor_App.app',
+    name='Nightreign_Relic_Editor.app',
 )
