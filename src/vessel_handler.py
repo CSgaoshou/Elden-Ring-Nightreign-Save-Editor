@@ -351,6 +351,7 @@ class VesselParser:
 
         # 3. Custom Presets Section
         preset_index = 0
+        counter_0_found = False
         LoadoutHandler().unused_preset_slots.clear()
         while cursor < len(globals.data):
             p_start = cursor
@@ -399,8 +400,13 @@ class VesselParser:
             else:
                 raise RuntimeError(f"Unknown hero ID {h_id}.")
 
+            # Usually, a counter value of 0 signals the last valid preset.
+            # However, there are very few cases where additional presets follow the first 0;
+            # we continue parsing until a second 0 is encountered since the rest of the block is all 0s.
             if counter_val == 0:
-                break
+                if counter_0_found:
+                    break
+                counter_0_found = True
         self.heroes = heroes
 
     def display_results(self):
