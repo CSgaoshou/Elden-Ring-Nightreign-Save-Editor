@@ -18,11 +18,9 @@ TODO:
 
 # openpyxl is lazy-loaded in export/import functions to speed up startup
 import inspect
-import json
 import logging
 import os
 import re
-import shutil
 import struct
 import sys
 import threading
@@ -38,17 +36,15 @@ from PIL import Image, ImageTk
 
 # project modules
 import globals
+import packer
 from basic_class import Item
 from config_manager import ConfigManager
-from globals import (COLOR_MAP, ICONS_DIR, ITEM_TYPE_GOODS, ITEM_TYPE_RELIC,
-                     UNIQUENESS_IDS, WORKING_DIR)
+from globals import COLOR_MAP, ICONS_DIR, ITEM_TYPE_RELIC, UNIQUENESS_IDS, WORKING_DIR
 from inventory_handler import InventoryHandler
 from language_manager import N_, lang_mgr
 from log_config import setup_logging
-from main_file import decrypt_ds2_sl2, encrypt_modified_files
-from main_file_import import decrypt_ds2_sl2_import
 from relic_checker import InvalidReason, RelicChecker, is_curse_invalid
-from source_data_handler import SourceDataHandler, get_system_language
+from source_data_handler import SourceDataHandler
 from vessel_handler import LoadoutHandler, is_vessel_available
 
 # Forward declaration for IDE/Linter support
@@ -174,8 +170,6 @@ def autosize_treeview_columns(tree, padding=20, min_width=50):
 
 
 imported_data = None
-MODE = None
-IMPORT_MODE = None
 char_name_list = []
 char_name_list_import = []
 ga_relic = []
@@ -377,235 +371,28 @@ RELIC_COLOR_HEX = {
 }
 
 
-def split_files(file_path, folder_name):
-    file_name = os.path.basename(file_path)
-    split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
-    # clean current dir
-    if os.path.exists(split_dir):
-        shutil.rmtree(split_dir)  # delete folder and everything inside
-    os.makedirs(split_dir, exist_ok=True)
-
-    if MODE == "PS4":
-        with open(file_path, "rb") as f:
-            header = f.read(0x80)
-            with open(os.path.join(split_dir, "header"), "wb") as out:
-                out.write(header)
-
-            chunk_size = 0x100000
-            for i in range(10):
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                with open(os.path.join(split_dir, f"userdata{i}"), "wb") as out:
-                    data = bytearray(data)
-                    data = (0x00100010).to_bytes(4, "little") + data
-                    out.write(data)
-
-            regulation = f.read()
-            if regulation:
-                with open(os.path.join(split_dir, "regulation"), "wb") as out:
-                    out.write(regulation)
-
-    elif MODE == "PC":
-        # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
-        decrypt_ds2_sl2(file_path)
-
-
 def save_file():
     save_current_data()
-
-    if MODE == "PC":
-
-        output_sl2_file = filedialog.asksaveasfilename()
-        if not output_sl2_file:
-            return
-
-        backup_save(output_sl2_file)
-        ConfigManager().last_file = output_sl2_file
-        encrypt_modified_files(output_sl2_file)
-
-    if MODE == "PS4":  ### HERE
-        print("data length", len(globals.data))
-
-        # Validate data length before proceeding
-        expected_length = 0x100004
-        if len(globals.data) != expected_length:
-            messagebox.showerror(
-                "Error",
-                f"Modified userdata size is invalid. "
-                f"Expected {hex(expected_length)}, got {hex(len(globals.data))}. Cannot save.",
-            )
-            return
-
-        try:
-            split_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "decrypted_output"
-            )
-
-            # Validate split directory exists
-            if not os.path.exists(split_dir):
-                messagebox.showerror("Error", f"Directory not found: {split_dir}")
-                return
-
-            output_file = filedialog.asksaveasfilename(
-                initialfile="memory.dat",
-                title="Save PS4 save as",
-                defaultextension=".dat",
-                filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
-            )
-
-            if not output_file:
-                return
+    output_file = filedialog.asksaveasfilename()
+    if not output_file:
+        return False
+    try:
+        if Path(output_file).exists():
             backup_save(output_file)
-            ConfigManager().last_file = output_file
-
-            # Track total bytes written for validation
-            total_bytes_written = 0
-
-            with open(output_file, "wb") as out:
-                # 1. HEADER
-                header_path = os.path.join(split_dir, "header")
-                if not os.path.exists(header_path):
-                    messagebox.showerror(
-                        "Error", f"Header file not found: {header_path}"
-                    )
-                    return
-
-                with open(header_path, "rb") as f:
-                    header_data = f.read()
-                    if len(header_data) != 0x80:
-                        messagebox.showerror(
-                            "Error",
-                            f"Invalid header size: {hex(len(header_data))}. "
-                            f"Expected {hex(0x80)} bytes.",
-                        )
-                        return
-                    out.write(header_data)
-                    total_bytes_written += len(header_data)
-
-                print(f"Written header: {hex(total_bytes_written)} bytes")
-
-                # 2. USERDATA 0–9
-                check_padding = (0x00100010).to_bytes(4, "little")
-                userdata_chunks_found = 0
-
-                for i in range(10):
-                    userdata_path = os.path.join(split_dir, f"userdata{i}")
-
-                    if not os.path.exists(userdata_path):
-                        # Check if this is expected (some saves may have fewer chunks)
-                        if i == 0:
-                            messagebox.showerror(
-                                "Error", f"Required file not found: {userdata_path}"
-                            )
-                            return
-                        else:
-                            print(
-                                f"Warning: userdata{i} not found, stopping at {i} chunks"
-                            )
-                            break
-
-                    # Read original
-                    with open(userdata_path, "rb") as f:
-                        block = f.read()
-
-                    # Validate block has data
-                    if len(block) < 4:
-                        messagebox.showerror(
-                            "Error", f"userdata{i} is too small ({len(block)} bytes)"
-                        )
-                        return
-
-                    # PS4 USERDATA should start with 4 bytes padding
-                    if block[:4] == check_padding:
-                        # Strip the padding
-                        block = block[4:]
-                    else:
-                        # Padding missing - this is suspicious but warn and continue
-                        print(
-                            f"Warning: userdata{i} does not start with expected padding {check_padding.hex()}"
-                        )
-                        print(f"         Got: {block[:4].hex()}")
-                        # Don't add padding, just use as-is
-
-                    # Validate chunk size (should be 0x100000 for full chunks)
-                    expected_chunk_size = 0x100000
-                    if (
-                        len(block) != expected_chunk_size and i < 9
-                    ):  # Last chunk might be smaller
-                        print(
-                            f"Warning: userdata{i} has unexpected size {hex(len(block))}, "
-                            f"expected {hex(expected_chunk_size)}"
-                        )
-
-                    # Write block to output
-                    out.write(block)
-                    total_bytes_written += len(block)
-                    userdata_chunks_found += 1
-
-                print(
-                    f"Written {userdata_chunks_found} userdata chunks: {hex(total_bytes_written)} bytes total"
-                )
-
-                # 3. REGULATION
-                regulation_path = os.path.join(split_dir, "regulation")
-                if os.path.exists(regulation_path):
-                    with open(regulation_path, "rb") as f:
-                        regulation_data = f.read()
-                        if regulation_data:
-                            out.write(regulation_data)
-                            total_bytes_written += len(regulation_data)
-                            print(f"Written regulation: {len(regulation_data)} bytes")
-                        else:
-                            print("Warning: regulation file is empty")
-                else:
-                    print("Warning: regulation file not found, skipping")
-
-            # 4. SIZE VALIDATION
-            final_size = os.path.getsize(output_file)
-            expected_final_size = 0x12A00A0
-
-            print(
-                f"Final file size: {hex(final_size)} (expected: {hex(expected_final_size)})"
-            )
-
-            if final_size != expected_final_size:
-                messagebox.showerror(
-                    "ERROR",
-                    f"Invalid output file size!\n"
-                    f"Expected: {hex(expected_final_size)} ({expected_final_size:,} bytes)\n"
-                    f"Got: {hex(final_size)} ({final_size:,} bytes)\n"
-                    f"Difference: {final_size - expected_final_size:+,} bytes\n\n"
-                    f"File may be corrupt. Check the source files in {split_dir}",
-                )
-                return
-
-            msg_info("Success", f"File saved successfully to:\n{output_file}")
-            print(f"Successfully saved to: {output_file}")
-
-        except PermissionError as e:
-            msg_error(
-                "Permission Error",
-                f"Cannot write to file. Check permissions.\n{str(e)}",
-            )
-        except IOError as e:
-            msg_error("I/O Error", f"Error reading/writing files.\n{str(e)}")
-        except Exception as e:
-            msg_error(
-                "Exception",
-                f"Unexpected error occurred:\n{str(e)}\n\n"
-                f"Check console for details.",
-            )
-            traceback.print_exc()
+        packer.repack("decrypted_output", output_file)
+        ConfigManager().last_file = output_file
+    except Exception as e:
+        messagebox.showerror("Error", f"An error was occurred while saving file: {e}")
+        return False
     return True
 
 
 def name_to_path():
-    global char_name_list, MODE
+    global char_name_list
     char_name_list = []
     unpacked_folder = WORKING_DIR / "decrypted_output"
 
-    prefix = "userdata" if MODE == "PS4" else "USERDATA_0"
+    prefix = "USERDATA_"
 
     for i in range(10):
         file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
@@ -637,11 +424,11 @@ def name_to_path():
 
 
 def name_to_path_import():
-    global char_name_list_import, IMPORT_MODE
+    global char_name_list_import
     char_name_list_import = []
     unpacked_folder = WORKING_DIR / "decrypted_output_import"
 
-    prefix = "userdata" if IMPORT_MODE == "PS4" else "USERDATA_0"
+    prefix = "USERDATA_"
 
     for i in range(10):
         file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
@@ -659,40 +446,7 @@ def name_to_path_import():
 
 
 def split_files_import(file_path, folder_name):
-    global IMPORT_MODE
-    file_name = os.path.basename(file_path)
-    split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
-    # clean current dir
-    if os.path.exists(split_dir):
-        shutil.rmtree(split_dir)  # delete folder and everything inside
-    os.makedirs(split_dir, exist_ok=True)
-
-    if file_name.lower() == "memory.dat":
-        IMPORT_MODE = "PS4"
-        with open(file_path, "rb") as f:
-            header = f.read(0x80)
-            with open(os.path.join(split_dir, "header"), "wb") as out:
-                out.write(header)
-
-            chunk_size = 0x100000
-            for i in range(10):
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                with open(os.path.join(split_dir, f"userdata{i}"), "wb") as out:
-                    data = bytearray(data)
-                    data = (0x00100010).to_bytes(4, "little") + data
-                    out.write(data)
-
-            regulation = f.read()
-            if regulation:
-                with open(os.path.join(split_dir, "regulation"), "wb") as out:
-                    out.write(regulation)
-
-    elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
-        # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
-        IMPORT_MODE = "PC"
-        decrypt_ds2_sl2_import(file_path)
+    packer.unpack(file_path, "decrypted_output_import")
 
 
 def import_save():
@@ -708,7 +462,7 @@ def import_save():
         return
 
     # Split and generate list
-    split_files_import(import_path, "decrypted_output_import")
+    packer.unpack(import_path, "decrypted_output_import")
     name_to_path_import()  # generates char_name_list_import = [(name, path), ...]
 
     # Show popup window with buttons
@@ -1871,21 +1625,16 @@ class SaveEditorGUI:
 
     def try_load_last_file(self):
         """Try to load the last opened save file and character"""
-        global MODE
 
         last_file = self.config.last_file
-        last_mode = self.config.last_mode
         last_char_index = self.config.last_char_index
 
         if not last_file or not os.path.exists(last_file):
             return
 
         try:
-            # Set mode
-            MODE = last_mode
-
-            # Split files
-            split_files(last_file, "decrypted_output")
+            # Unpack files
+            packer.unpack(last_file, "decrypted_output")
 
             self.update_inventory_comboboxes()
             self.update_vessel_tab_comboboxes()
@@ -4961,7 +4710,7 @@ class SaveEditorGUI:
             self.refresh_inventory_and_vessels()
 
     def open_file(self):
-        global MODE, userdata_path
+        global userdata_path
 
         file_path = filedialog.askopenfilename(
             title="Select Save File",
@@ -4972,35 +4721,8 @@ class SaveEditorGUI:
 
         file_name = os.path.basename(file_path)
 
-        # Determine mode based on file content, not just filename
-        # This allows custom save file names (e.g., from ModEngine 3 Manager)
-        if file_name.lower() == "memory.dat":
-            MODE = "PS4"
-        elif file_path.lower().endswith(".sl2") or file_path.lower().endswith(".co2"):
-            # Check if it's a valid SL2 file by looking for BND4 header
-            try:
-                with open(file_path, "rb") as f:
-                    header = f.read(4)
-                if header == b"BND4":
-                    MODE = "PC"
-                else:
-                    messagebox.showerror(
-                        "Error",
-                        "This .sl2 file does not have a valid BND4 header. It may be corrupted or not a valid Nightreign save file.",
-                    )
-                    return
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not read file: {e}")
-                return
-        else:
-            messagebox.showerror(
-                "Error",
-                "Please select a valid save file:\n\n• PC: .sl2 file (e.g., NR0000.sl2 or custom named .sl2)\n• PS4: decrypted memory.dat file",
-            )
-            return
-
         # Split files
-        split_files(file_path, "decrypted_output")
+        packer.unpack(file_path, "decrypted_output")
 
         self.update_inventory_comboboxes()
         self.update_vessel_tab_comboboxes()
@@ -5010,7 +4732,6 @@ class SaveEditorGUI:
 
         # Save the opened file path to config
         self.config.last_file = file_path
-        self.config.last_mode = MODE
         # Reset character index since we're opening a new file
         self.last_char_index = 0
         self.config.save()

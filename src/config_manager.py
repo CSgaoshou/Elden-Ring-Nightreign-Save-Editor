@@ -41,7 +41,6 @@ class ConfigManager:
         _config = {
             "last_file": "",
             "last_char_index": 0,
-            "last_mode": None,
             "language": get_system_language(),
             "theme": "Dark",
             "auto_backup": True,
@@ -137,14 +136,4 @@ class ConfigManager:
     def reduce_message_pop(self, value):
         with self._lock:
             self._config["reduce_message_pop"] = value
-            self.save()
-
-    @property
-    def last_mode(self):
-        return self._config["last_mode"]
-
-    @last_mode.setter
-    def last_mode(self, value):
-        with self._lock:
-            self._config["last_mode"] = value
             self.save()
