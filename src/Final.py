@@ -6198,6 +6198,7 @@ class ModifyRelicDialog:
         self._set_position(parent)
 
         self.safe_mode_var = tk.BooleanVar(value=True)
+        self.auto_sort_var = tk.BooleanVar(value=True)
         self.game_data = SourceDataHandler()
         self.relic_checker = RelicChecker()
         self.inventory = InventoryHandler()
@@ -6827,12 +6828,20 @@ class ModifyRelicDialog:
         modifier_frame.pack(fill="x", pady=5)
         self.safe_mode_cb = ttk.Checkbutton(
             modifier_frame,
-            text="Safe Mode: Auto-filter legal effects",
+            text="Search legal effects only",
             variable=self.safe_mode_var,
             onvalue=True,
             offvalue=False,
         )
         self.safe_mode_cb.pack(anchor="w")
+        self.auto_sort_cb = ttk.Checkbutton(
+            modifier_frame,
+            text="Auto-Sort on Apply Changes",
+            variable=self.auto_sort_var,
+            onvalue=True,
+            offvalue=False,
+        )
+        self.auto_sort_cb.pack(anchor="w")
 
         # Item ID section (optional modification)
         item_frame = ttk.LabelFrame(scrollable_frame, text="Relic Item ID", padding=10)
@@ -7744,6 +7753,8 @@ class ModifyRelicDialog:
         self.on_effect_change(effect_index)
 
     def apply_changes(self):
+        assert self.relic_checker is not None, "Relic checker not initialized"
+
         # Extract effect IDs from entries
         new_effects = []
 
@@ -7753,7 +7764,9 @@ class ModifyRelicDialog:
                 new_effects.append(value)
             except ValueError:
                 new_effects.append(0)
-        new_effects = self.relic_checker.sort_effects(new_effects)
+
+        if self.auto_sort_var.get():
+            new_effects = self.relic_checker.sort_effects(new_effects)
 
         # Check if item ID was changed
         new_item_id = None
