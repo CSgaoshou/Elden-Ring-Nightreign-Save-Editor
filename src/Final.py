@@ -30,7 +30,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, Literal
 
 from PIL import Image, ImageTk
 
@@ -1941,15 +1941,19 @@ class SaveEditorGUI:
 
         def on_add_to_preset(vessel_slot):
             hero_type = self.vessel_char_combo.current() + 1
-            preset_name = self.ask_preset_name()
+            preset_name = self.ask_for(
+                "New Preset Name",
+                "Enter name for new preset:",
+                input_type="printable_ascii",
+            ).strip()
+            if preset_name == "":
+                return
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
             relics = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "relics"
             ]
-            if preset_name is None:
-                return
             try:
                 self.loadout_handler.push_preset(
                     hero_type, vessel_id, relics, preset_name
@@ -2561,60 +2565,79 @@ class SaveEditorGUI:
             no_presets.pack(pady=20)
             bind_scroll_recursive(no_presets)
 
-    def ask_preset_name(self, master: tk.Misc | None = None, initial=""):
-        """Open a dialog to ask the user for a preset name"""
+    def ask_for(
+        self,
+        title: str,
+        prompt: str,
+        note: str = "",
+        input_type: Literal["integer", "printable_ascii","any"]="any",
+        initial="",
+        master: tk.Misc | None = None,
+    ):
+        """Open a dialog to ask the user for something"""
 
-        def check_regex(P):
-            # All printable ASCII (space to ~)
-            if re.fullmatch(r"[\x20-\x7E]{0,18}", P):
-                return True
-            return False
+        def validate(P: str):
+            match input_type:
+                case "integer":
+                    return P.isdigit() or P == ""
+                case "printable_ascii":
+                    return re.fullmatch(r"[\x20-\x7E]{0,18}", P) is not None
+            return True
 
         master = master or self.root
-        vcmd = master.register(check_regex)
+        vcmd = (master.register(validate), "%P")
         dialog = tk.Toplevel(master)
         self.color_theme.apply(dialog)
-        dialog.title("New Preset Name")
-        lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
+        dialog.title(title)
+        lang_mgr.register(dialog, N_(title), attr="title")
         dialog.transient(master)
         dialog.grab_set()
 
-        label = ttk.Label(
-            dialog, text="Enter name for new preset:", style="Main.TLabel"
-        )
-        lang_mgr.register(label, N_("Enter name for new preset:"))
-        label.pack(pady=10, padx=10)
+        main_frame = ttk.Frame(dialog)
+        main_frame.pack(expand=True, fill='both')
+        space = ttk.Frame(master=main_frame, height=20)
+        space.pack()
 
-        name_var = tk.StringVar(value=initial)
-        name_entry = ttk.Entry(
-            dialog,
+        if note != "":
+            note_label = ttk.Label(main_frame, text=N_(note))
+            lang_mgr.register(note_label, N_(note))
+            note_label.pack(pady=10, padx=10)
+
+        entry_frame = ttk.Frame(main_frame)
+        entry_frame.pack(pady=10, padx=10)
+        label = ttk.Label(entry_frame, text=prompt)
+        lang_mgr.register(label, N_(prompt))
+        label.pack(side=tk.LEFT, padx=(0, 10))
+        var = tk.StringVar(value=initial)
+        entry = ttk.Entry(
+            entry_frame,
             validate="key",
-            validatecommand=(vcmd, "%P"),
-            width=30,
-            textvariable=name_var,
+            validatecommand=vcmd,
+            width=10 if input_type == "integer" else 30,
+            textvariable=var,
         )
-        name_entry.pack(pady=5, padx=10)
-        name_entry.focus_set()
+        entry.pack(side=tk.LEFT)
+        entry.focus_set()
 
-        result = {"name": ""}  # Use a dict to pass value back
+        result = {"value": ""}  # Use a dict to pass value back
 
         def on_ok():
-            result["name"] = name_entry.get().strip()
-            if len(result["name"]) == 0:
-                messagebox.showerror("Error", _("Preset name cannot be empty"))
-                return
+            result["value"] = var.get()
             dialog.destroy()
 
         def on_cancel():
+            result["value"] = ""
             dialog.destroy()
 
-        ok_button = ttk.Button(dialog, text="OK", command=on_ok)
-        lang_mgr.register(ok_button, N_("OK"))
-        ok_button.pack(side=tk.LEFT, padx=5, pady=10)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=10)
 
-        cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
+        ok_button = ttk.Button(button_frame, text="OK", command=on_ok)
+        lang_mgr.register(ok_button, N_("OK"))
+        ok_button.pack(side=tk.LEFT, padx=10)
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
         lang_mgr.register(cancel_button, N_("Cancel"))
-        cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
+        cancel_button.pack(side=tk.LEFT, padx=10)
 
         dialog.withdraw()  # Hide initially to avoid flicker in wrong position
         dialog.update_idletasks()  # Ensure geometry is calculated before positioning
@@ -2634,7 +2657,7 @@ class SaveEditorGUI:
         dialog.deiconify()
 
         master.wait_window(dialog)
-        return result["name"] if len(result["name"]) > 0 else None
+        return result["value"]
 
     def edit_preset_relics(self, preset_info):
         """Open dialog to edit relics in a preset"""
@@ -2704,7 +2727,13 @@ class SaveEditorGUI:
 
         # Header
         def on_header_click(_):
-            new_name = self.ask_preset_name(dialog, preset["name"])
+            new_name = self.ask_for(
+                "New Preset Name",
+                "Enter name for new preset:",
+                initial=preset["name"],
+                input_type="printable_ascii",
+                master=dialog,
+            ).strip()
             # Restore grab (modal state) to this dialog
             # as the sub-dialog `ask_preset_name` stole it.
             if dialog.winfo_exists():
@@ -4917,6 +4946,12 @@ class SaveEditorGUI:
         else:
             self.illegal_count_label.config(text="✓ All Relics Valid")
 
+        # Backup original order
+        if hasattr(self, "all_relics"):
+            ga_to_order = {relic["ga"]: i for i, relic in enumerate(self.all_relics)}
+        else:
+            ga_to_order = {}
+
         # Store all relic data for filtering
         self.all_relics = []
         # Populate treeview
@@ -5019,11 +5054,10 @@ class SaveEditorGUI:
         sorted_by_acq = sorted(
             self.all_relics, key=lambda r: r.get("acquisition_index", 999999)
         )
-        self.all_relics.sort(
-            key=lambda r: r.get("acquisition_index", 999999), reverse=True
-        )
         for rank, relic in enumerate(sorted_by_acq, start=1):
             relic["acquisition_rank"] = rank
+        # Apply backup order
+        self.all_relics.sort(key=lambda r: ga_to_order.get(r["ga"], 0))
 
         # Update Heading image
         head_img = (
@@ -5063,9 +5097,15 @@ class SaveEditorGUI:
             if self.inventory_handler:
                 self.inventory_handler.set_illegal_relics()
 
-        self.run_task_async(
-            heavy_loading, (), "Loading...", callback=self.refresh_inventory_ui
-        )
+        def complete():
+            self.refresh_inventory_ui()
+
+            # Default sort inventory relics by acquisition rank
+            self.sort_column = "#"
+            self.sort_reverse = False
+            self.sort_by_column("#")
+
+        self.run_task_async(heavy_loading, (), "Loading...", callback=complete)
 
     def filter_relics(self):
         """Filter relics based on search term and all filter criteria"""
@@ -5281,18 +5321,18 @@ class SaveEditorGUI:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_column = col
-            self.sort_reverse = False
+            self.sort_reverse = True
 
         # Define sort key based on column
         def get_sort_key(relic):
             if col == "FAV":
-                return 0 if relic.get("is_favorite", False) else 1
+                return 1 if relic.get("is_favorite", False) else 0
             elif col == "#":
                 return relic.get("acquisition_rank", 99999)
             elif col == "Item Name":
                 return relic["item_name"].lower()
             elif col == "Deep":
-                return 0 if relic.get("is_deep", False) else 1
+                return 1 if relic.get("is_deep", False) else 0
             elif col == "Item ID":
                 return relic["real_id"]
             elif col == "Color":
@@ -5376,6 +5416,11 @@ class SaveEditorGUI:
         menu.add_command(
             label="📋 Paste Effects",
             command=self.paste_selected_relic_effects,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Move Index",
+            command=self.reindex_selected_relic,
         )
         menu.post(event.x_root, event.y_root)
 
@@ -5536,6 +5581,50 @@ class SaveEditorGUI:
         tags = [self.tree.item(item, "tags") for item in selection]
         ga_handles = [int(tag[0]) for tag in tags]
         self.paste_relic_effects(ga_handles)
+
+    def reindex_selected_relic(self):
+        """Set the acquisition index of the selected relic"""
+        selection = self.tree.selection()
+        if not selection:
+            msg_warning("Warning", "No relic selected")
+            return
+
+        target_index_str = self.ask_for(
+            "Move Index",
+            "Move to After (#):",
+            note="Note: This will also affect the 'Acquisition Time' sorting in-game.",
+            input_type="integer",
+        )
+        if not target_index_str.isdigit():
+            return
+
+        target_index = int(target_index_str)
+        target_index = min(max(0, target_index), len(self.all_relics))
+
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        ga_handles.reverse()
+
+        if target_index >= len(self.all_relics):
+            new_acq_id = self.inventory_handler.request_new_acquisition_id()
+        else:
+            rank_order = sorted(self.all_relics, key=lambda x: x["acquisition_rank"])
+            new_acq_id = rank_order[target_index]["acquisition_index"]
+        self.inventory_handler.reindex_acquisition_id_at(new_acq_id, *ga_handles)
+        self.refresh_inventory_lightly()
+
+        # Resort by index
+        self.sort_reverse = False
+        self.sort_column = "#"
+        self.sort_by_column("#")
+
+        # Select the reindexed relic in the UI after refreshing
+        items = self.tree.get_children()
+        first_index = -1
+        for i, relic in enumerate(self.all_relics):
+            if relic["ga"] == ga_handles[-1]:
+                first_index = i
+        self.tree.selection_set(items[first_index : first_index + len(ga_handles)])
 
     def modify_selected_relic(self):
         selection = self.tree.selection()
