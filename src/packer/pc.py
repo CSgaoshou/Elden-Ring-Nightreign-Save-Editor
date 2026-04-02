@@ -9,7 +9,6 @@ import shutil
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -63,6 +62,10 @@ class BND4Entry:
         """The actual encrypted payload follows the IV."""
         return self.encrypted_data[IV_SIZE:]
 
+    @property
+    def decrpyted_size(self) -> int:
+        return self.size - IV_SIZE
+
     def decrypt(self) -> bytearray:
         """Decrypts the AES-CBC payload and stores it in decrypted_data."""
         cipher = Cipher(algorithms.AES(DS2_KEY), modes.CBC(self.iv))
@@ -102,20 +105,6 @@ class BND4Entry:
             encryptor.update(bytes(self.decrypted_data)) + encryptor.finalize()
         )
         return self.iv + encrypted_payload
-
-
-class EntryMeta(TypedDict):
-    index: int
-    size: int
-    data_offset: int
-    name_offset: int
-    footer_length: int
-    iv: str
-
-
-class Meta(TypedDict):
-    header: str
-    entries: list[EntryMeta]
 
 
 class Packer(_Packer):
@@ -169,7 +158,7 @@ class Packer(_Packer):
 
     @staticmethod
     def check_repack(input_dir):
-        return (input_dir / "meta.json").exists()
+        return (input_dir / "raw.dat").exists()
 
     @staticmethod
     def unpack(save_file: Path, output_dir: Path):
@@ -178,73 +167,51 @@ class Packer(_Packer):
 
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        meta = {
-            "header": raw_data[:BND4_HEADER_LEN].hex(),
-            "entries": [
-                {
-                    "index": entry.index,
-                    "size": entry.size,
-                    "data_offset": entry.data_offset,
-                    "name_offset": entry.name_offset,
-                    "footer_length": entry.footer_length,
-                    "iv": entry.iv.hex(),
-                }
-                for entry in entries
-            ],
-        }
-        (output_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        (output_dir / "raw.dat").write_bytes(raw_data)
 
         for entry in entries:
-            decrypted = entry.decrypt()
-            output_path = output_dir / entry.filename
-            output_path.write_bytes(decrypted)
+            try:
+                decrypted = entry.decrypt()
+                output_path = output_dir / entry.filename
+                output_path.write_bytes(decrypted)
+                logger.debug(f"Decrypted: {entry.filename}")
+            except Exception as e:
+                logger.error(f"Failed to decrypt entry {entry.index}: {e}")
 
     @staticmethod
     def repack(input_dir: Path, output_file: Path) -> None:
-        meta: Meta = json.loads((input_dir / "meta.json").read_text())
-        header = bytes.fromhex(meta["header"])
-        entries_meta = meta["entries"]
+        # We start with the original bytes to preserve the exact BND4 structure/headers
+        raw_data = (input_dir / "raw.dat").read_bytes()
+        entries = Packer._parse_bnd4(raw_data)
+        new_sl2_data = bytearray(raw_data)
 
-        new_data = bytearray(header)
-        entry_table_size = BND4_ENTRY_HEADER_LEN * len(entries_meta)
-        new_data.extend(b"\x00" * entry_table_size)
-        current_offset = BND4_HEADER_LEN + entry_table_size
-
-        for i, entry_meta in enumerate(entries_meta):
-            data = (input_dir / f"USERDATA_{i}").read_bytes()
-            entry = BND4Entry(
-                index=i,
-                size=len(data),
-                data_offset=current_offset,
-                name_offset=entry_meta["name_offset"],
-                footer_length=entry_meta["footer_length"],
-                encrypted_data=bytes.fromhex(entry_meta["iv"]),
-                decrypted_data=bytearray(data),
-            )
-
-            if len(entry.decrypted_data) != entry.size:
-                raise ValueError(
-                    f"Size mismatch for entry {i}: expected {entry.size} bytes, "
-                    f"got {len(entry.decrypted_data)} bytes."
+        for entry in entries:
+            file_path = input_dir / entry.filename
+            if not file_path.exists():
+                raise FileNotFoundError(
+                    f"Modified file {entry.filename} not found in input directory."
                 )
 
-            entry.patch_checksum()
-            encrypted = entry.encrypt()
-            new_data.extend(encrypted)
-            entry_pos = BND4_HEADER_LEN + i * BND4_ENTRY_HEADER_LEN
-            struct.pack_into(
-                "<8siiiii",
-                new_data,
-                entry_pos,
-                BND4_ENTRY_MAGIC,
-                len(encrypted),
-                0,
-                current_offset,
-                entry_meta["name_offset"],
-                entry_meta["footer_length"],
-            )
-            current_offset += len(encrypted)
+            # 1. Load modified data
+            modified_data = file_path.read_bytes()
+            if len(modified_data) != entry.decrpyted_size:
+                raise ValueError(
+                    f"Size of modified file {entry.filename} does not match original size."
+                )
 
+            entry.decrypted_data = bytearray(modified_data)
+
+            # 2. Patch checksum
+            entry.patch_checksum()
+
+            # 3. Encrypt data back to AES-CBC
+            encrypted_data = entry.encrypt()
+
+            # 4. Inject back into the BND4 byte structure
+            start = entry.data_offset
+            end = start + len(encrypted_data)
+            new_sl2_data[start:end] = encrypted_data
+
+        # Write the final SL2 file
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_bytes(new_data)
+        output_file.write_bytes(new_sl2_data)
