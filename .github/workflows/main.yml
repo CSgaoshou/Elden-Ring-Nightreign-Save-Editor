@@ -41,7 +41,7 @@ jobs:
             spec: src/build.spec
             artifact: Nightreign_Relic_Editor_LINUX_x86_64
             artifact-path: dist/*
-            uv-python: 3.14
+            uv-python: 3.12
 
           - name: macOS Silicon
             os: macos-latest
@@ -75,6 +75,10 @@ jobs:
 
       - name: Install Dependencies
         run: uv sync ${{ matrix.uv-python && format('--python {0}', matrix.uv-python) || '' }}
+
+      - name: Install tkinter for Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
 
       - name: Build Executable
         run: uv run pyinstaller ${{ matrix.spec }}

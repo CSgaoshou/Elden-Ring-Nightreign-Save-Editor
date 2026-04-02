@@ -9,7 +9,7 @@ a = Analysis(
     datas=[
         (os.path.join(os.getcwd(), 'src', 'Resources'), 'Resources'),
     ],
-    hiddenimports=[],
+    hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
