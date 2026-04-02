@@ -1461,6 +1461,9 @@ class SaveEditorGUI:
         self.root.title("Elden Ring Nightreign Save Editor")
         self.root.geometry("1080x700")
 
+        # Create Context Menu
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+
         # Modify dialog reference
         self.modify_dialog = None
 
@@ -3686,7 +3689,8 @@ class SaveEditorGUI:
         empty_slots = [name in ("(Empty)", "-") for name in relic_names]
 
         # Create context menu
-        menu = tk.Menu(tree, tearoff=0)
+        menu = self.context_menu
+        menu.delete(0, "end")  # Clear previous menu items
 
         if len(selection) == 1:
             index = slot_indexes[0]
@@ -5397,7 +5401,8 @@ class SaveEditorGUI:
             self.tree.selection_set(target_item)
             selections = (target_item,)
 
-        menu = tk.Menu(self.root, tearoff=0)
+        menu = self.context_menu
+        menu.delete(0, "end")  # Clear previous menu items
         menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
         menu.add_separator()
         if len(selections) == 1:
@@ -5422,7 +5427,7 @@ class SaveEditorGUI:
             label="Move Index",
             command=self.reindex_selected_relic,
         )
-        menu.post(event.x_root, event.y_root)
+        menu.tk_popup(event.x_root, event.y_root)
 
     def toggle_favorite(self):
         """Toggle favorite status of selected relic"""
