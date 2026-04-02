@@ -454,39 +454,42 @@ class SourceDataHandler:
         if self.vessel_names is None:
             self.vessel_names = _vessel_names
         else:
-            _vessel_names.set_index('id')
-            self.vessel_names.set_index('id')
+            self.vessel_names.set_index("id", inplace=True)
+            _vessel_names.set_index("id", inplace=True)
             self.vessel_names.update(_vessel_names)
-            self.vessel_names.reset_index()
+            self.vessel_names.reset_index(inplace=True)
         logger.info("Setting NPC Names...")
         if self.npc_name is None:
             self.npc_name = _npc_names
         else:
-            self.npc_name.set_index('id')
-            _npc_names.set_index('id')
+            self.npc_name.set_index("id", inplace=True)
+            _npc_names.set_index("id", inplace=True)
             self.npc_name.update(_npc_names)
-            self.npc_name.reset_index()
+            self.npc_name.reset_index(inplace=True)
         logger.info("Setting Relic Names...")
         if self.relic_name is None:
             self.relic_name = _relic_names
         else:
-            self.relic_name.set_index('id')
-            _relic_names.set_index('id')
+            self.relic_name.set_index("id", inplace=True)
+            _relic_names.set_index("id", inplace=True)
             self.relic_name.update(_relic_names)
-            self.relic_name.reset_index()
+            self.relic_name.reset_index(inplace=True)
         logger.info("Setting Effect Names...")
         if self.effect_name is None:
             self.effect_name = _effect_names
         else:
-            self.effect_name.set_index('id')
-            _effect_names.set_index('id')
+            self.effect_name.set_index("id", inplace=True)
+            _effect_names.set_index("id", inplace=True)
+            _effect_names = _effect_names[~_effect_names.index.duplicated(keep="last")]
             self.effect_name.update(_effect_names)
-            self.effect_name.reset_index()
+            self.effect_name.reset_index(inplace=True)
 
     def reload_text(self, language: str = "en_US"):
         logger.info(f"Reloading text for language: {language}")
         try:
             self._load_text(language=language)
+            logger.info("Clear Names Cache...")
+            _get_name_wrapped.cache_clear()
             return True
         except FileNotFoundError:
             self._load_text()
