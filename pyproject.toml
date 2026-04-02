@@ -1,6 +1,6 @@
 [project]
 name = "elden-ring-nightreign-save-editor"
-version = "4.6.4"
+version = "4.6.5"
 description = "A powerful and user-friendly save editor for Nightreign, focused on full control over Relics, save data, and character progression for PC/PS4."
 readme = "README.md"
 requires-python = ">=3.12"
