@@ -4410,12 +4410,6 @@ class SaveEditorGUI:
         )
         self.illegal_count_label.pack(side="left", padx=(0, 15))
 
-        lb_blue = ttk.Label(
-            legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
-        )
-        lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
-        lb_blue.pack(side="left", padx=5)
-
         lb_red = ttk.Label(
             legend_frame, text="Red = Illegal", style="illegal.TLabel"
         )
@@ -4428,6 +4422,12 @@ class SaveEditorGUI:
         lang_mgr.register(lb_purple, N_("Purple = Missing Curse"))
         lb_purple.pack(side="left", padx=5)
 
+        lb_teal = ttk.Label(
+            legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
+        )
+        lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
+        lb_teal.pack(side="left", padx=5)
+
         lb_orange = ttk.Label(
             legend_frame,
             text="Orange = Unique Relic (don't edit)",
@@ -4436,11 +4436,11 @@ class SaveEditorGUI:
         lang_mgr.register(lb_orange, N_("Orange = Unique Relic (don't edit)"))
         lb_orange.pack(side="left", padx=5)
 
-        lb_teal = ttk.Label(
-            legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
+        lb_blue = ttk.Label(
+            legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
         )
-        lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
-        lb_teal.pack(side="left", padx=5)
+        lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
+        lb_blue.pack(side="left", padx=5)
 
         # Search frame - Row 1: Basic search and filters
         search_frame = ttk.Frame(self.inventory_tab)
