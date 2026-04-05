@@ -190,7 +190,7 @@ msgstr "红色 = 非法遗物"
 
 #: Final.py:4580
 msgid "Purple = Missing Curse"
-msgstr "紫色 = 缺少负面"
+msgstr "紫色 = 负面非法"
 
 #: Final.py:4588
 msgid "Orange = Unique Relic (don't edit)"
@@ -198,7 +198,7 @@ msgstr "橙色 = 商店遗物（请勿编辑）"
 
 #: Final.py:4594
 msgid "Teal = Strict Invalid"
-msgstr "青绿色 = 严格无效"
+msgstr "绿色 = 严格非法"
 
 #: Final.py:4602
 msgid "🔍 Search:"
