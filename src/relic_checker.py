@@ -417,6 +417,8 @@ class RelicChecker:
             # Get sort ID for the primary effect
             if effect_id in [-1, 0, 4294967295]:
                 sort_id = float('inf')  # Empty effects go last
+            elif effect_id not in self.data_source.effects:
+                sort_id = float("inf")
             else:
                 sort_id = self.data_source.effects[effect_id].sort_id
 

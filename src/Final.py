@@ -6292,7 +6292,7 @@ class ModifyRelicDialog:
         self._set_position(parent)
 
         self.safe_mode_var = tk.BooleanVar(value=True)
-        self.auto_sort_var = tk.BooleanVar(value=True)
+        self.auto_fix_var = tk.BooleanVar(value=True)
         self.game_data = SourceDataHandler()
         self.relic_checker = RelicChecker()
         self.inventory = InventoryHandler()
@@ -6928,14 +6928,14 @@ class ModifyRelicDialog:
             offvalue=False,
         )
         self.safe_mode_cb.pack(anchor="w")
-        self.auto_sort_cb = ttk.Checkbutton(
+        self.auto_fix_cb = ttk.Checkbutton(
             modifier_frame,
-            text="Auto-Sort on Apply Changes",
-            variable=self.auto_sort_var,
+            text="Auto-Fix on Apply Changes",
+            variable=self.auto_fix_var,
             onvalue=True,
             offvalue=False,
         )
-        self.auto_sort_cb.pack(anchor="w")
+        self.auto_fix_cb.pack(anchor="w")
 
         # Item ID section (optional modification)
         item_frame = ttk.LabelFrame(scrollable_frame, text="Relic Item ID", padding=10)
@@ -7080,8 +7080,16 @@ class ModifyRelicDialog:
             entry_frame = ttk.Frame(effect_frame)
             entry_frame.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(0, 5))
 
+            def validate(P: str):
+                return re.fullmatch(r"-?\d*", P) is not None
+
             # Manual entry
-            entry = ttk.Entry(entry_frame, width=15)
+            entry = ttk.Entry(
+                entry_frame,
+                width=15,
+                validate="key",
+                validatecommand=(self.dialog.register(validate), "%P"),
+            )
             entry.pack(side="left", padx=5)
             entry.bind("<KeyRelease>", lambda e, idx=i: self.on_effect_change(idx))
             self.effect_entries.append(entry)
@@ -7224,7 +7232,10 @@ class ModifyRelicDialog:
         is_curse_slot = slot_index >= 3
 
         # Check compatibility
-        conflict_id = self.game_data.effects[effect_id].conflict_id
+        try:
+            conflict_id = self.game_data.effects[effect_id].conflict_id
+        except KeyError:
+            conflict_id = -1
         if conflict_id != -1:
             for slot_index2 in range(3) if not is_curse_slot else range(3, 6):
                 if slot_index == slot_index2:
@@ -7235,7 +7246,10 @@ class ModifyRelicDialog:
                     effect_id2 = int(self.effect_entries[slot_index2].get())
                 except ValueError:
                     effect_id2 = 0
-                conflict_id2 = self.game_data.effects[effect_id2].conflict_id
+                try:
+                    conflict_id2 = self.game_data.effects[effect_id2].conflict_id
+                except KeyError:
+                    conflict_id2 = -1
 
                 if conflict_id2 == -1:
                     continue
@@ -7798,8 +7812,14 @@ class ModifyRelicDialog:
             for i in range(3) if not is_curse_slot else range(3, 6):
                 if i == effect_index:
                     continue
-                _effect_id = int(self.effect_entries[i].get())
-                _conflic_id = self.game_data.effects[_effect_id].conflict_id
+                try:
+                    _effect_id = int(self.effect_entries[i].get())
+                except ValueError:
+                    _effect_id = 0xFFFFFFFF
+                try:
+                    _conflic_id = self.game_data.effects[_effect_id].conflict_id
+                except KeyError:
+                    _conflic_id = -1
                 _compatible_effect_params_df = _effect_params_df[
                     (_effect_params_df["compatibilityId"] == -1)
                     | (_effect_params_df["compatibilityId"] != _conflic_id)
@@ -7846,21 +7866,32 @@ class ModifyRelicDialog:
         self.effect_entries[effect_index].insert(0, str(effect_id))
         self.on_effect_change(effect_index)
 
-    def apply_changes(self):
-        assert self.relic_checker is not None, "Relic checker not initialized"
-
-        # Extract effect IDs from entries
-        new_effects = []
-
+    def fix_invalid_entry(self):
         for entry in self.effect_entries:
             try:
                 value = int(entry.get())
-                new_effects.append(value)
             except ValueError:
-                new_effects.append(0)
+                value = 0xFFFFFFFF
+            if value not in self.game_data.effects:
+                value = 0xFFFFFFFF
+            entry.delete(0, tk.END)
+            entry.insert(0, str(value))
 
-        if self.auto_sort_var.get():
-            new_effects = self.relic_checker.sort_effects(new_effects)
+    def apply_changes(self):
+        assert self.relic_checker is not None, "Relic checker not initialized"
+
+        if self.auto_fix_var.get():
+            self.fix_invalid_entry()
+            self.auto_sort_effects()
+
+        # Extract effect IDs from entries
+        new_effects = []
+        for entry in self.effect_entries:
+            try:
+                value = int(entry.get())
+            except ValueError:
+                value = 0xFFFFFFFF
+            new_effects.append(value)
 
         # Check if item ID was changed
         new_item_id = None
