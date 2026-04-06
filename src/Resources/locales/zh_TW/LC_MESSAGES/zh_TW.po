@@ -43,8 +43,8 @@ msgid "💾 Save Modified File"
 msgstr "💾 儲存已修改的檔案"
 
 #: Final.py:1937
-msgid "💾 Import save (PC/PS4)"
-msgstr "💾 匯入存檔（PC/PS4）"
+msgid "📥 Replace Character"
+msgstr "📥 取代角色"
 
 #: Final.py:1944
 msgid "Settings"

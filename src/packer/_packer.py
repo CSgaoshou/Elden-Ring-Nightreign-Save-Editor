@@ -1,25 +1,27 @@
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 
-class Packer:
-    name: str = "Base"
+class Packer(ABC):
+    def __init__(self):
+        self.mode = "Base"
 
-    @staticmethod
-    def check_unpack(save_file: Path) -> bool:
-        """Check whether the save file was suitable with this packer."""
-        ...
+    @classmethod
+    @abstractmethod
+    def probe_unpack(cls, file_path: Path) -> bool: ...
 
-    @staticmethod
-    def check_repack(input_dir: Path) -> bool:
-        """Check whether the given directory was unpacked by this packer."""
-        ...
+    @classmethod
+    @abstractmethod
+    def probe_repack(cls, input_dir: Path) -> bool: ...
 
-    @staticmethod
-    def unpack(save_file: Path, output_dir: Path) -> None:
-        """Unpack all valid entries from the `save_file` to `output_dir`."""
-        ...
+    @abstractmethod
+    def unpack(self, file_path: Path, output_dir: Path): ...
 
-    @staticmethod
-    def repack(input_dir: Path, output_file: Path) -> None:
-        """Repack the contents of `input_dir` into `output_file`."""
-        ...
+    @abstractmethod
+    def repack(self, input_dir: Path, output_file: Path): ...
+
+    @abstractmethod
+    def read_steam_id(self, unpack_dir: Path) -> bytes: ...
+
+    @abstractmethod
+    def patch_steam_id(self, userdata_file: Path, steam_id: bytes): ...

@@ -66,7 +66,6 @@ logger = logging.getLogger(__name__)
 
 # Global variables
 os.chdir(WORKING_DIR)
-
 userdata_path = None
 
 
@@ -74,6 +73,16 @@ userdata_path = None
 CONFIG_FILE = os.path.join(get_base_dir(), "editor_config.json")
 # Save Backup DIr Path
 BACKUP_DIR = os.path.join(get_base_dir(), "backup")
+
+UNPACK_DIR = "decrypted_output"
+UNPACK_DIR_IMPORT = "decrypted_output_import"
+
+SUPPORT_FILETYPES = (
+    ("PC Save File", ".sl2"),
+    ("PS Save File (memory.dat)", ".dat"),
+    ("Seamless Coop Save File", ".co2"),
+    ("All Files", "*.*"),
+)
 
 
 def backup_save(file_path):
@@ -169,17 +178,6 @@ def autosize_treeview_columns(tree, padding=20, min_width=50):
         tree.column(col, width=final_width, minwidth=final_width, stretch=False)
 
 
-imported_data = None
-char_name_list = []
-char_name_list_import = []
-ga_relic = []
-ga_items = []
-# AOB_search='00 00 00 00 ?? 00 00 00 ?? ?? 00 00 00 00 00 00 ??'
-AOB_search = "00 00 00 00 0A 00 00 00 ?? ?? 00 00 00 00 00 00 06"
-from_aob_steam = 44
-steam_id = None
-
-
 # Vessel slot color meanings
 # Red = Burning Scene relics only
 # Green = Tranquil Scene relics only
@@ -263,43 +261,6 @@ def parse_items(data_type, start_offset, slot_count=5120):
     return items, offset
 
 
-# Global to store acquisition order mapping (GA handle -> acquisition ID from inventory entry)
-# ga_acquisition_order = {}
-# Replaced by InventoryHandler.ga_to_acquisition_id
-
-
-# gaprint has been replaced by InventoryHandler for a more Pythonic implementation.
-def gaprint(data_type):
-    global ga_relic, ga_items
-    ga_items = []
-    ga_relic = []
-    start_offset = 0x14
-    slot_count = 5120
-    items, end_offset = parse_items(data_type, start_offset, slot_count)
-
-    for item in items:
-        type_bits = item.gaitem_handle & 0xF0000000
-        parsed_item = (
-            item.gaitem_handle,
-            item.item_id,
-            item.effect_1,
-            item.effect_2,
-            item.effect_3,
-            item.sec_effect1,
-            item.sec_effect2,
-            item.sec_effect3,
-            item.offset,
-            item.size,
-        )
-        ga_items.append(parsed_item)
-
-        if type_bits == ITEM_TYPE_RELIC:
-            ga_relic.append(parsed_item)
-
-    # debug_ga_relic_check()
-    return end_offset
-
-
 def get_character_loadout(char_name):
     """Get the current relic loadout for a character.
 
@@ -373,13 +334,13 @@ RELIC_COLOR_HEX = {
 
 def save_file():
     save_current_data()
-    output_file = filedialog.asksaveasfilename()
+    output_file = filedialog.asksaveasfilename(filetypes=SUPPORT_FILETYPES)
     if not output_file:
         return False
     try:
         if Path(output_file).exists():
             backup_save(output_file)
-        packer.repack("decrypted_output", output_file)
+        packer.repack(UNPACK_DIR, output_file)
         ConfigManager().last_file = output_file
     except Exception as e:
         messagebox.showerror("Error", f"An error was occurred while saving file: {e}")
@@ -387,155 +348,25 @@ def save_file():
     return True
 
 
-def name_to_path():
-    global char_name_list
-    char_name_list = []
-    unpacked_folder = WORKING_DIR / "decrypted_output"
-
+def name_to_path(unpack_dir: Path | str):
+    unpack_dir = Path(unpack_dir)
+    name_list: list[tuple[str, str]] = []
     prefix = "USERDATA_"
-
     for i in range(10):
-        file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
-        if not os.path.exists(file_path):
+        userdata = unpack_dir / f"{prefix}{i}"
+        if not userdata.exists():
+            logger.warning(f"{userdata} not found, skipping")
             continue
-
+        userdata_size = userdata.stat().st_size
+        if userdata_size < 0x1000:
+            logger.warning(f"{userdata} is too small ({userdata_size}), skipping")
         try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-                # Check minimum file size before parsing
-                if len(file_data) < 0x1000:  # Minimum expected size
-                    print(
-                        f"Warning: {file_path} is too small ({len(file_data)} bytes), skipping"
-                    )
-                    continue
-                name = InventoryHandler.get_player_name_from_data(file_data)
-                if name:
-                    char_name_list.append((name, file_path))
-        except struct.error as e:
-            print(f"Error parsing save file {file_path}: Data structure error - {e}")
-            print(f"  This may indicate a corrupted save file or incompatible format")
-        except IndexError as e:
-            traceback.print_exc()
-            print(f"Error parsing save file {file_path}: Index error - {e}")
-            print(f"  This may indicate a corrupted save file")
+            name = InventoryHandler.get_player_name_from_data(userdata.read_bytes())
+            if name:
+                name_list.append((name, userdata.absolute()))
         except Exception as e:
-            traceback.print_exc()
-            print(f"Error reading {file_path}: {e}")
-
-
-def name_to_path_import():
-    global char_name_list_import
-    char_name_list_import = []
-    unpacked_folder = WORKING_DIR / "decrypted_output_import"
-
-    prefix = "USERDATA_"
-
-    for i in range(10):
-        file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
-        if not os.path.exists(file_path):
-            continue
-
-        try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-                name = InventoryHandler.get_player_name_from_data(file_data)
-                if name:
-                    char_name_list_import.append((name, file_path))
-        except Exception as e:
-            print(f"Error reading {file_path}: {e}")
-
-
-def split_files_import(file_path, folder_name):
-    packer.unpack(file_path, "decrypted_output_import")
-
-
-def import_save():
-    global imported_data
-    global char_name_list_import
-
-    if globals.data == None:
-        messagebox.showerror("Error", "Please select a character to replace first")
-        return
-
-    import_path = filedialog.askopenfilename()
-    if not import_path:
-        return
-
-    # Split and generate list
-    packer.unpack(import_path, "decrypted_output_import")
-    name_to_path_import()  # generates char_name_list_import = [(name, path), ...]
-
-    # Show popup window with buttons
-    show_import_popup()
-
-
-def show_import_popup():
-    popup = tk.Toplevel()
-    popup.title("Select Character to Import")
-
-    label = tk.Label(popup, text="Choose a character:", font=("Arial", 12, "bold"))
-    label.pack(pady=10)
-
-    # Create buttons for each character
-    for name, path in char_name_list_import:
-        btn = tk.Button(
-            popup,
-            text=name,
-            width=30,
-            command=lambda p=path: load_imported_data_and_close(p, popup),
-        )
-        btn.pack(pady=3)
-
-
-def load_imported_data_and_close(path, popup):
-    load_imported_data(path)
-    popup.destroy()
-
-
-def load_imported_data(path):
-    global imported_data
-
-    # Check if steam_id was found - required for import
-    if steam_id is None:
-        messagebox.showerror(
-            "Error",
-            "Cannot import save: Steam ID not found in current save file.\n\n"
-            "The Steam ID pattern could not be detected in your save.\n"
-            "This may indicate a corrupted or incompatible save file.",
-        )
-        return
-
-    with open(path, "rb") as f:
-        imported_data = f.read()
-
-    offsets = aob_search(imported_data, AOB_search)
-    if not offsets:
-        messagebox.showerror(
-            "Error",
-            "Cannot import save: Steam ID pattern not found in the imported save file.\n\n"
-            "The imported save may be corrupted or incompatible.",
-        )
-        return
-
-    offset = offsets[0] + 44
-    imported_data = (
-        imported_data[:offset] + bytes.fromhex(steam_id) + imported_data[offset + 8 :]
-    )
-
-    if len(imported_data) <= len(globals.data):
-        globals.data = imported_data + globals.data[len(imported_data) :]
-
-    else:
-        globals.data = imported_data[: len(globals.data)]
-
-    for name, file in char_name_list_import:
-        if path == file:
-            char_name = name
-    save_current_data()
-    msg_info(
-        "Success",
-        f"Character '{char_name}' imported successfully. Save the file and open it again to see changes.",
-    )
+            logger.error(f"Error on reading {userdata}: {e}")
+    return name_list
 
 
 def export_relics_to_excel(filepath="relics.xlsx"):
@@ -723,92 +554,7 @@ def save_current_data():
     global userdata_path
     if globals.data and userdata_path:
         with open(userdata_path, "wb") as f:
-
             f.write(globals.data)
-
-
-def aob_to_pattern(aob: str):
-
-    parts = aob.split()
-    pattern = bytearray()
-    mask = bytearray()
-    for p in parts:
-        if p == "??":
-            pattern.append(0x00)  # placeholder
-            mask.append(0)  # 0 = wildcard (must NOT be 0x00)
-        else:
-            pattern.append(int(p, 16))
-            mask.append(1)  # 1 = must match exactly
-    return bytes(pattern), bytes(mask)
-
-
-def aob_search(data: bytes, aob: str):
-    pattern, mask = aob_to_pattern(aob)
-    L = len(pattern)
-    mv = memoryview(data)
-
-    start = 0x58524  # skip below this offset
-    end = len(data) - L + 1
-
-    for i in range(start, end):
-
-        # Check bytes
-        for j in range(L):
-
-            b = mv[i + j]
-
-            # Non-wildcard: must match exactly
-            if mask[j]:
-                if b != pattern[j]:
-                    break
-
-            # Wildcard:
-            # 2025-12-28: Allow 0x00 to resolve Steam ID detection issues.
-            # Narrowed down AOB_str (bytes 5 & 17 fixed) to prevent false positives.
-            else:
-                # if b == 0:  # Removed this restriction
-                #     break
-                continue
-
-        else:
-            # Inner loop did not break → MATCH FOUND
-            return [i]
-
-    return []
-
-
-def find_steam_id(section_data):
-    # # 假設你的 Steam ID 是 '76561198000000000' (17位數字)
-    # # 先將它轉為 8 byte 的 little-endian 二進制格式 (這是 Steam ID 常見的儲存方式)
-    # import struct
-    # target_steam_id_hex = struct.pack('<Q', int(76561198013358313)).hex().upper()
-    # # 或者直接用你已知的 16進位 字串搜尋
-
-    # # 搜尋 section_data 中你 ID 出現的所有位置
-    # target_bytes = struct.pack('<Q', int(76561198013358313))
-    # index = section_data.find(target_bytes)
-    # print(f"你的 Steam ID 出現在偏移量: {hex(index)}")
-    # if index != -1:
-    #     search_start = index - 44
-    #     actual_aob = section_data[search_start : search_start + 17].hex(' ').upper()
-    #     print(f"預期 AOB 位置的實際數據為: {actual_aob}")
-    #     print(f"原本定義的 AOB 模式為: 00 00 00 00 ?? 00 00 00 ?? ?? 00 00 00 00 00 00 ??")
-
-    offsets = aob_search(section_data, AOB_search)
-    if not offsets:
-        # AOB pattern not found - return None instead of crashing
-        print("Warning: Steam ID AOB pattern not found in save data")
-        print(f"  AOB pattern searched: {AOB_search}")
-        print(f"  Save data size: {len(section_data)} bytes")
-        print(f"  This may happen with PS4 saves or after a game update")
-        return None
-
-    offset = offsets[0] + 44
-    steam_id = section_data[offset : offset + 8]
-
-    hex_str = steam_id.hex().upper()
-
-    return hex_str
 
 
 class ColorTheme:
@@ -1469,6 +1215,8 @@ class SaveEditorGUI:
 
         # Track last selected character index for config saving
         self.last_char_index = None
+        self.char_table: list[tuple[str, str]] = []
+        """[(char_name, data_path), ...]"""
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(root)
@@ -1637,20 +1385,17 @@ class SaveEditorGUI:
 
         try:
             # Unpack files
-            packer.unpack(last_file, "decrypted_output")
+            packer.unpack(last_file, UNPACK_DIR)
 
             self.update_inventory_comboboxes()
             self.update_vessel_tab_comboboxes()
-
-            # Get character names
-            name_to_path()
 
             # Display character buttons
             self.display_character_buttons()
 
             # Auto-select the last used character if valid
-            if char_name_list and 0 <= last_char_index < len(char_name_list):
-                name, path = char_name_list[last_char_index]
+            if 0 <= last_char_index < len(self.char_table):
+                name, path = self.char_table[last_char_index]
                 self.on_character_click(last_char_index, path, name)
 
         except Exception as e:
@@ -1686,7 +1431,7 @@ class SaveEditorGUI:
         ft_info_label.pack(pady=(0, 10))
 
         ft_btn_open = ttk.Button(
-            file_frame, text="📁 Open Save File", command=self.open_file, width=20
+            file_frame, text="📁 Open Save File", command=self.open_file, width=30
         )
         lang_mgr.register(ft_btn_open, N_("📁 Open Save File"))
         ft_btn_open.pack(pady=5)
@@ -1694,17 +1439,17 @@ class SaveEditorGUI:
             file_frame,
             text="💾 Save Modified File",
             command=self.save_changes,
-            width=20,
+            width=30,
         )
         lang_mgr.register(ft_btn_save, N_("💾 Save Modified File"))
         ft_btn_save.pack(pady=5)
         ft_btn_import = ttk.Button(
             file_frame,
-            text="💾 Import save (PC/PS4)",
-            command=self.import_save_tk,
-            width=20,
+            text="📥 Replace Character",
+            command=self.on_replace_character_click,
+            width=30,
         )
-        lang_mgr.register(ft_btn_import, N_("💾 Import save (PC/PS4)"))
+        lang_mgr.register(ft_btn_import, N_("📥 Replace Character"))
         ft_btn_import.pack(pady=5)
 
         # Setting section
@@ -3414,130 +3159,6 @@ class SaveEditorGUI:
             messagebox.showerror("Error", f"Failed to write preset relic: {e}")
             return False
 
-    # def show_preset_relic_replacement_dialog(self, parent_dialog, relic_tree, slot_items,
-    #                                          ga_handles, slot_idx, is_deep, current_color,
-    #                                          preset_offset, char_name, vessel_slot, preset_name,
-    #                                          slot_relic_data=None, update_details_func=None,
-    #                                          ga_to_full_info=None):
-    #     """Show dialog to select a replacement relic for a preset slot"""
-    #     dialog = tk.Toplevel(parent_dialog)
-    #     dialog.title(f"Select Relic for Slot {slot_idx + 1}")
-    #     dialog.geometry("950x600")
-    #     dialog.transient(parent_dialog)
-    #     dialog.grab_set()
-
-    #     # Options frame
-    #     options_frame = ttk.Frame(dialog)
-    #     options_frame.pack(fill='x', padx=10, pady=5)
-
-    #     # Color filter option
-    #     any_color_var = tk.BooleanVar(value=False)
-
-    #     def refresh_list():
-    #         self.refresh_preset_relic_list(
-    #             replacement_tree, details_text, current_color,
-    #             any_color_var.get(), is_deep, search_var.get()
-    #         )
-
-    #     ttk.Checkbutton(options_frame, text="Show all colors", variable=any_color_var,
-    #                     command=refresh_list).pack(side='left', padx=5)
-
-    #     # Search
-    #     ttk.Label(options_frame, text="Search:").pack(side='left', padx=5)
-    #     search_var = tk.StringVar()
-    #     search_entry = ttk.Entry(options_frame, textvariable=search_var, width=30)
-    #     search_entry.pack(side='left', padx=5)
-    #     search_var.trace_add('write', lambda *args: refresh_list())
-
-    #     # Main content - split into list and details
-    #     content_frame = ttk.Frame(dialog)
-    #     content_frame.pack(fill='both', expand=True, padx=10, pady=5)
-
-    #     # Left side - Relic list
-    #     list_frame = ttk.LabelFrame(content_frame, text="Available Relics")
-    #     list_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
-
-    #     columns = ('Name', 'Color')
-    #     replacement_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=18)
-    #     replacement_tree.heading('Name', text='Relic Name')
-    #     replacement_tree.heading('Color', text='Color')
-
-    #     replacement_tree.column('Name', width=280)
-    #     replacement_tree.column('Color', width=80)
-
-    #     scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=replacement_tree.yview)
-    #     replacement_tree.configure(yscrollcommand=scrollbar.set)
-
-    #     replacement_tree.pack(side='left', fill='both', expand=True)
-    #     scrollbar.pack(side='right', fill='y')
-
-    #     # Right side - Details panel
-    #     details_outer = ttk.LabelFrame(content_frame, text="Relic Details")
-    #     details_outer.pack(side='right', fill='both', expand=True, padx=(5, 0))
-
-    #     details_text = tk.Text(details_outer, wrap='word', width=45, height=20, font=('Consolas', 9))
-    #     details_text.pack(fill='both', expand=True, padx=5, pady=5)
-    #     details_text.config(state='disabled')
-
-    #     # Configure text tags
-    #     details_text.tag_configure('title', font=('Segoe UI', 11, 'bold'))
-    #     details_text.tag_configure('section', font=('Segoe UI', 10, 'bold'), foreground='#4a90d9')
-    #     details_text.tag_configure('curse', foreground='#cc4444')
-
-    #     # Populate initial list
-    #     self.refresh_preset_relic_list(replacement_tree, details_text, current_color, False, is_deep, "")
-
-    #     # Button frame
-    #     btn_frame = ttk.Frame(dialog)
-    #     btn_frame.pack(fill='x', padx=10, pady=10)
-
-    #     def on_select():
-    #         selection = replacement_tree.selection()
-    #         if not selection:
-    #             messagebox.showwarning("No Selection", "Please select a relic.")
-    #             return
-
-    #         # Get relic data from our stored map
-    #         item_data = replacement_tree.item(selection[0])
-    #         new_ga = item_data.get('tags', [None])[0]
-    #         if new_ga is None:
-    #             return
-    #         new_ga = int(new_ga)
-
-    #         values = item_data['values']
-    #         new_name = values[0]
-    #         new_color = values[1]
-
-    #         # Update in memory
-    #         ga_handles[slot_idx] = new_ga
-
-    #         # Write to file
-    #         if self.write_preset_relic(preset_offset, slot_idx, new_ga):
-    #             # Update the parent tree display
-    #             slot_label = f"{'🔮 ' if is_deep else ''}Slot {slot_idx + 1}"
-    #             for item_id, idx in slot_items.items():
-    #                 if idx == slot_idx:
-    #                     relic_tree.item(item_id, values=(slot_label, new_name, new_color))
-    #                     break
-
-    #             # Update slot_relic_data if provided
-    #             if slot_relic_data is not None and ga_to_full_info is not None:
-    #                 slot_relic_data[slot_idx] = ga_to_full_info.get(new_ga)
-
-    #             # Update details in parent dialog
-    #             if update_details_func:
-    #                 update_details_func()
-
-    #             # Refresh the presets tree in the main window
-    #             self.refresh_presets()
-    #             dialog.destroy()
-
-    #     ttk.Button(btn_frame, text="Select", command=on_select).pack(side='left', padx=5)
-    #     ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='right', padx=5)
-
-    #     # Double-click to select
-    #     replacement_tree.bind("<Double-1>", lambda e: on_select())
-
     def refresh_preset_relic_list(
         self, tree, details_text, current_color, any_color, is_deep, search_text
     ):
@@ -4745,23 +4366,14 @@ class SaveEditorGUI:
     def open_file(self):
         global userdata_path
 
-        file_path = filedialog.askopenfilename(
-            title="Select Save File",
-        )
-
+        file_path = filedialog.askopenfilename(filetypes=SUPPORT_FILETYPES)
         if not file_path:
             return
 
-        file_name = os.path.basename(file_path)
-
-        # Split files
-        packer.unpack(file_path, "decrypted_output")
+        packer.unpack(file_path, UNPACK_DIR)
 
         self.update_inventory_comboboxes()
         self.update_vessel_tab_comboboxes()
-
-        # Get character names
-        name_to_path()
 
         # Save the opened file path to config
         self.config.last_file = file_path
@@ -4778,9 +4390,10 @@ class SaveEditorGUI:
             widget.destroy()
 
         self.char_buttons = []
+        self.char_table = name_to_path(UNPACK_DIR)
 
         columns = 4  # Number of buttons per row
-        for idx, (name, path) in enumerate(char_name_list):
+        for idx, (name, path) in enumerate(self.char_table):
             row = idx // columns
             col = idx % columns
 
@@ -4818,7 +4431,7 @@ class SaveEditorGUI:
         self.load_character(path)
 
     def load_character(self, path):
-        global userdata_path, steam_id
+        global userdata_path
         userdata_path = path
 
         try:
@@ -4838,8 +4451,6 @@ class SaveEditorGUI:
             # Initialize Relic Checker (set_illegal_relics will be called by reload_inventory)
             relic_checker = RelicChecker()
             # NOTE: Don't call set_illegal_relics() here - reload_inventory() will call it
-
-            steam_id = find_steam_id(globals.data)
 
             # Refresh all tabs (reload_inventory calls set_illegal_relics)
             self.reload_inventory()
@@ -6263,9 +5874,60 @@ class SaveEditorGUI:
         else:
             messagebox.showerror("Error", message)
 
-    def import_save_tk(self):
-        import_save()
-        self.load_character(userdata_path)
+    def on_replace_character_click(self):
+        if globals.data is None:
+            messagebox.showerror("Error", "Please load a character first")
+            return
+
+        import_save_file = filedialog.askopenfilename(filetypes=SUPPORT_FILETYPES)
+        if not import_save_file:
+            return
+
+        packer.unpack(import_save_file, UNPACK_DIR_IMPORT)
+        char_table = name_to_path(UNPACK_DIR_IMPORT)
+
+        def replace(new_userdata_path: str):
+            path = userdata_path
+            old_name = InventoryHandler.get_player_name_from_data(globals.data)
+            index = self.char_table.index((old_name, path))
+            self.replace_character(new_userdata_path)
+            new_name = InventoryHandler.get_player_name_from_data(globals.data)
+            msg_info("Success", f"Successfully replace {old_name} <- {new_name}")
+            popup.destroy()
+            self.display_character_buttons()
+            self.on_character_click(index, path, new_name)
+
+        popup = tk.Toplevel(self.root)
+        self.color_theme.apply(popup)
+        popup.title("Select Character to replace")
+        frame = ttk.Frame(popup)
+        frame.pack()
+        label = ttk.Label(frame, text="Choose a character:")
+        label.pack(pady=10)
+        for name, path in char_table:
+            btn = ttk.Button(
+                frame,
+                text=name,
+                width=30,
+                command=lambda p=path: replace(p),
+            )
+            btn.pack(pady=1)
+
+    def replace_character(self, new_userdata_path: str):
+        current_steam_id = packer.read_steam_id(UNPACK_DIR)
+        try:
+            packer.patch_steam_id(new_userdata_path, current_steam_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to patch steam ID: {e}")
+            return
+
+        with open(new_userdata_path, "rb") as f:
+            imported_data = f.read()
+        if len(imported_data) <= len(globals.data):
+            globals.data = imported_data + globals.data[len(imported_data) :]
+        else:
+            globals.data = imported_data[: len(globals.data)]
+        save_current_data()
 
     def save_changes(self):
         if globals.data and userdata_path:

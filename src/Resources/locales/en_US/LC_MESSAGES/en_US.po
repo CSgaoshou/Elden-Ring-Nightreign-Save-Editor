@@ -41,8 +41,8 @@ msgid "💾 Save Modified File"
 msgstr "💾 Save Modified File"
 
 #: Final.py:1937
-msgid "💾 Import save (PC/PS4)"
-msgstr "💾 Import save (PC/PS4)"
+msgid "📥 Replace Character"
+msgstr "📥 Replace Character"
 
 #: Final.py:1944
 msgid "Settings"
