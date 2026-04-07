@@ -77,11 +77,16 @@ BACKUP_DIR = os.path.join(get_base_dir(), "backup")
 UNPACK_DIR = "decrypted_output"
 UNPACK_DIR_IMPORT = "decrypted_output_import"
 
+SUPPORT_FILETYPES_PC = (("PC Save File", "*.sl2 *.co2"),)
+
+SUPPORT_FILETYPES_PS = (("PS Save File", "*memory.dat"),)
+
+SUPPORT_FILETYPES_OTHER = (("All Files", "*.*"),)
+
 SUPPORT_FILETYPES = (
-    ("PC Save File", ".sl2"),
-    ("PS Save File (memory.dat)", ".dat"),
-    ("Seamless Coop Save File", ".co2"),
-    ("All Files", "*.*"),
+    *SUPPORT_FILETYPES_PC,
+    *SUPPORT_FILETYPES_PS,
+    *SUPPORT_FILETYPES_OTHER,
 )
 
 
@@ -334,9 +339,26 @@ RELIC_COLOR_HEX = {
 
 def save_file():
     save_current_data()
-    output_file = filedialog.asksaveasfilename(filetypes=SUPPORT_FILETYPES)
+
+    match packer.detect_repacker(UNPACK_DIR).mode:
+        case "PC":
+            default_ext = ".sl2"
+            filetypes = SUPPORT_FILETYPES_PC
+        case "PS":
+            default_ext = ".dat"
+            filetypes = SUPPORT_FILETYPES_PS
+        case _:
+            default_ext = ""
+            filetypes = ()
+    filetypes += SUPPORT_FILETYPES_OTHER
+
+    output_file = filedialog.asksaveasfilename(
+        defaultextension=default_ext,
+        filetypes=filetypes,
+    )
     if not output_file:
         return False
+
     try:
         if Path(output_file).exists():
             backup_save(output_file)

@@ -20,14 +20,16 @@ class PackerRegistry:
             if handler_class.probe_unpack(file_path):
                 handler = handler_class()
                 handler.mode = mode
-                return handler_class()
+                return handler
         raise ValueError(f"Unable to recognize mode: {file_path}")
 
     @classmethod
     def detect_repacker(cls, input_dir: Path) -> Packer:
-        for name, handler_class in cls._handlers.items():
+        for mode, handler_class in cls._handlers.items():
             if handler_class.probe_repack(input_dir):
-                return handler_class()
+                handler = handler_class()
+                handler.mode = mode
+                return handler
         raise ValueError(f"Unable to recognize mode: {input_dir}")
 
     @classmethod
