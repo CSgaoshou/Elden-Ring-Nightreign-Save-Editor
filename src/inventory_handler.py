@@ -811,7 +811,7 @@ class InventoryHandler:
                 self.relics[ga_handle].mark_favorite()
             for idx, entry in enumerate(self.entries):
                 if entry.ga_handle == ga_handle:
-                    self.update_entry_data(idx)
+                    self.update_entry_data(idx, False)
             return self.relics[ga_handle].is_favorite
         except KeyError:
             raise ValueError("Relic not found in inventory")
