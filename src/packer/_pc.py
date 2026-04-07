@@ -1,9 +1,11 @@
 import hashlib
 import logging
 import mmap
+import os
 import shutil
 import struct
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -24,6 +26,76 @@ START_OF_CHECKSUM_DATA = 4
 END_OF_CHECKSUM_DATA = PADDING_SIZE + 16  # 28 bytes
 
 logger = logging.getLogger(__name__)
+
+
+class BND4:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.entry_count = int(struct.unpack_from("<i", self.data, 12)[0])
+
+    @classmethod
+    def build(cls, headers: bytes, unpack_dir: Path):
+        data = bytearray(headers)
+        dummy = BND4(headers)
+        for entry in dummy.entries(fill=False):
+            decrypted_data = bytearray((unpack_dir / entry.filename).read_bytes())
+            entry.decrypted_data = decrypted_data
+            if len(decrypted_data) != entry.decrpyted_size:
+                raise ValueError(
+                    f"Size of modified file {entry.filename} does not match original size."
+                )
+            entry.patch_checksum()
+            entry.encrypted_data = entry.encrypt()
+            start = entry.data_offset
+            end = start + len(entry.encrypted_data)
+            data[start:end] = entry.encrypted_data
+        return cls(bytes(data))
+
+    def get_header(self):
+        length = self.get_entry(0, False).data_offset
+        return self.data[:length]
+
+    def get_entry(self, i: int, fill=True):
+        pos = BND4_HEADER_LEN + (BND4_ENTRY_HEADER_LEN * i)
+
+        # Read Entry Magic
+        magic = self.data[pos : pos + 8]
+        if magic != BND4_ENTRY_MAGIC:
+            raise ValueError(
+                f"BND4 Entry Magic mismatch at index {i}: "
+                f"Expected {BND4_ENTRY_MAGIC.hex()}, "
+                f"Got {magic.hex()}"
+            )
+
+        # Unpack remaining header values
+        size, _, data_offset, name_offset, footer_length = struct.unpack_from(
+            "<i i i i i", self.data, pos + 8
+        )
+
+        if fill:
+            # Sanity checks
+            if size <= 0 or data_offset <= 0 or data_offset + size > len(self.data):
+                raise ValueError(
+                    f"BND4 Entry {i} has invalid size or bounds: "
+                    f"offset={data_offset}, size={size}, "
+                    f"end_pos={data_offset + size}, total_data_len={len(self.data)}"
+                )
+            encrypted_data = bytes(self.data[data_offset : data_offset + size])
+        else:
+            encrypted_data = b""
+
+        return BND4Entry(
+            index=i,
+            size=size,
+            data_offset=data_offset,
+            name_offset=name_offset,
+            footer_length=footer_length,
+            encrypted_data=encrypted_data,
+        )
+
+    def entries(self, fill=True):
+        for i in range(self.entry_count):
+            yield self.get_entry(i, fill)
 
 
 @dataclass
@@ -88,6 +160,7 @@ class BND4Entry:
                 f"No decrypted data available to encrypt for entry {self.index}."
             )
 
+        self.encrypted_data = os.urandom(IV_SIZE)  # IV
         cipher = Cipher(algorithms.AES(DS2_KEY), modes.CBC(self.iv))
         encryptor = cipher.encryptor()
 
@@ -95,46 +168,6 @@ class BND4Entry:
             encryptor.update(bytes(self.decrypted_data)) + encryptor.finalize()
         )
         return self.iv + encrypted_payload
-
-
-def parse_bnd4(data: bytes) -> list[BND4Entry]:
-    if data[:4] != BND4_MAGIC:
-        raise ValueError("BND4 magic header not found! Invalid SL2 file.")
-
-    entries: list[BND4Entry] = []
-    # Read number of entries (offset 12, 4 bytes, little-endian int)
-    num_entries = struct.unpack_from("<i", data, 12)[0]
-    logger.info(f"Detected BND4 archive with {num_entries} entries.")
-
-    for i in range(num_entries):
-        pos = BND4_HEADER_LEN + (BND4_ENTRY_HEADER_LEN * i)
-
-        # Read Entry Magic
-        magic = data[pos : pos + 8]
-        if magic != BND4_ENTRY_MAGIC:
-            logger.warning(f"Skipping entry {i}: Invalid entry magic.")
-            continue
-
-        # Unpack remaining header values
-        size, _, data_offset, name_offset, footer_length = struct.unpack_from(
-            "<i i i i i", data, pos + 8
-        )
-
-        # Sanity checks
-        if size <= 0 or data_offset <= 0 or data_offset + size > len(data):
-            logger.warning(f"Skipping entry {i}: Invalid size or bounds.")
-            continue
-
-        entry = BND4Entry(
-            index=i,
-            size=size,
-            data_offset=data_offset,
-            name_offset=name_offset,
-            footer_length=footer_length,
-            encrypted_data=bytes(data[data_offset : data_offset + size]),
-        )
-        entries.append(entry)
-    return entries
 
 
 @PackerRegistry.register("PC")
@@ -146,17 +179,17 @@ class PCPacker(Packer):
 
     @classmethod
     def probe_repack(cls, input_dir):
-        return (input_dir / "raw.dat").exists()
+        return (input_dir / "HEADER").exists()
 
     def unpack(self, file_path, output_dir):
         raw_data = file_path.read_bytes()
-        entries = parse_bnd4(raw_data)
+        bnd4 = BND4(raw_data)
 
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "raw.dat").write_bytes(raw_data)
+        (output_dir / "HEADER").write_bytes(bnd4.get_header())
 
-        for entry in entries:
+        for entry in bnd4.entries():
             try:
                 decrypted = entry.decrypt()
                 output_path = output_dir / entry.filename
@@ -166,41 +199,10 @@ class PCPacker(Packer):
                 logger.error(f"Failed to decrypt entry {entry.index}: {e}")
 
     def repack(self, input_dir, output_file):
-        # We start with the original bytes to preserve the exact BND4 structure/headers
-        raw_data = (input_dir / "raw.dat").read_bytes()
-        entries = parse_bnd4(raw_data)
-        new_sl2_data = bytearray(raw_data)
-
-        for entry in entries:
-            file_path = input_dir / entry.filename
-            if not file_path.exists():
-                raise FileNotFoundError(
-                    f"Modified file {entry.filename} not found in input directory."
-                )
-
-            # 1. Load modified data
-            modified_data = file_path.read_bytes()
-            if len(modified_data) != entry.decrpyted_size:
-                raise ValueError(
-                    f"Size of modified file {entry.filename} does not match original size."
-                )
-
-            entry.decrypted_data = bytearray(modified_data)
-
-            # 2. Patch checksum
-            entry.patch_checksum()
-
-            # 3. Encrypt data back to AES-CBC
-            encrypted_data = entry.encrypt()
-
-            # 4. Inject back into the BND4 byte structure
-            start = entry.data_offset
-            end = start + len(encrypted_data)
-            new_sl2_data[start:end] = encrypted_data
-
-        # Write the final SL2 file
+        header = (input_dir / "HEADER").read_bytes()
+        bnd4 = BND4.build(header, input_dir)
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_bytes(new_sl2_data)
+        output_file.write_bytes(bnd4.data)
 
     def read_steam_id(self, unpack_dir):
         userdata_10 = unpack_dir / "USERDATA_10"
