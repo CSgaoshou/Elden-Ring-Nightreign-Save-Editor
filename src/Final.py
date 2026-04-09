@@ -495,7 +495,7 @@ def delete_all_illegal_relics():
     deleted_count = 0
     failed_deletions = []
 
-    for ga in inventory.illegal_gas:
+    for ga in inventory.illegal_gas.copy():
         try:
             inventory.remove_relic_from_inventory(ga)
             save_current_data()
