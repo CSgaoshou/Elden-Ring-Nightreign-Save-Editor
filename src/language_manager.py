@@ -65,23 +65,16 @@ class LanguageManager:
         Thread-safe refresh of all registered widgets.
         Can be safely called from background threads.
         """
+        def task():
+            with self._list_lock:
+                self.clean_up()
+                for item in self._widgets:
+                    self._update_widget(item)
+
         with self._list_lock:
-            # 1. Filter out destroyed widgets to prevent memory leaks
-            self.clean_up()
-
-            # 2. Batch update remaining widgets
-            for item in self._widgets:
-                self._safe_gui_update(item)
-
-    def _safe_gui_update(self, item):
-        """
-        Ensures UI updates happen on the Tkinter Main Thread.
-        Uses widget.after() to schedule the update if called from another thread.
-        """
-        widget = item["widget"]
-        if widget.winfo_exists():
-            # Schedule the update on the main thread's event loop
-            widget.after(0, lambda: self._update_widget(item))
+            if len(self._widgets) == 0:
+                return
+            self._widgets[0]["widget"].after(0, task)
 
     def _update_widget(self, item):
         try:
