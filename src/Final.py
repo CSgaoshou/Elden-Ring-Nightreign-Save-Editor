@@ -26,25 +26,26 @@ import sys
 import threading
 import tkinter as tk
 import traceback
-import zipfile
-from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, Literal
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from PIL import Image, ImageTk
 
 # project modules
 import globals
 import packer
+import ui
 from basic_class import Item
 from config_manager import ConfigManager
-from globals import COLOR_MAP, ICONS_DIR, ITEM_TYPE_RELIC, UNIQUENESS_IDS, WORKING_DIR
+from globals import (COLOR_MAP, ICONS_DIR, ITEM_TYPE_RELIC, UNIQUENESS_IDS,
+                     WORKING_DIR)
 from inventory_handler import InventoryHandler
 from language_manager import N_, lang_mgr
 from log_config import setup_logging
 from relic_checker import InvalidReason, RelicChecker, is_curse_invalid
 from source_data_handler import SourceDataHandler
+from utils.backup import create_backup
 from vessel_handler import LoadoutHandler, is_vessel_available
 
 # Forward declaration for IDE/Linter support
@@ -76,65 +77,6 @@ BACKUP_DIR = os.path.join(get_base_dir(), "backup")
 
 UNPACK_DIR = "decrypted_output"
 UNPACK_DIR_IMPORT = "decrypted_output_import"
-
-SUPPORT_FILETYPES_PC = (("PC Save File", "*.sl2 *.co2"),)
-
-SUPPORT_FILETYPES_PS = (("PS Save File", "*memory.dat"),)
-
-SUPPORT_FILETYPES_OTHER = (("All Files", "*.*"),)
-
-SUPPORT_FILETYPES = (
-    *SUPPORT_FILETYPES_PC,
-    *SUPPORT_FILETYPES_PS,
-    *SUPPORT_FILETYPES_OTHER,
-)
-
-
-def backup_save(file_path):
-    global BACKUP_DIR
-    config = ConfigManager()
-
-    def manage_backup_rotation():
-        # Get all zip files except root.zip
-        files = [
-            f for f in os.listdir(BACKUP_DIR) if f.endswith(".zip") and f != "root.zip"
-        ]
-
-        # Sort files by modification time (oldest first)
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(BACKUP_DIR, x)))
-
-        # If more than config.max_backups, remove the oldest ones
-        while len(files) > config.max_backups:
-            oldest_file = files.pop(0)
-            os.remove(os.path.join(BACKUP_DIR, oldest_file))
-            logger.info(f"Removed old backup: {oldest_file}")
-
-    # Ensure backup directory exists
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-        logger.info(f"Created backup directory: {BACKUP_DIR}")
-
-    root_zip_path = os.path.join(BACKUP_DIR, "root.zip")
-
-    # Check if root.zip exists
-    if not os.path.exists(root_zip_path):
-        # Case: root.zip doesn't exist, create it as the pure backup
-        logger.info("root.zip not found. Creating initial pure backup...")
-        with zipfile.ZipFile(root_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(file_path, os.path.basename(file_path))
-        logger.info(f"Successfully created: {root_zip_path}")
-    else:
-        # Case: root.zip exists, perform regular time-stamped backup
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"backup_{timestamp}.zip"
-        backup_full_path = os.path.join(BACKUP_DIR, backup_filename)
-
-        with zipfile.ZipFile(backup_full_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(file_path, os.path.basename(file_path))
-        logger.info(f"Created regular backup: {backup_filename}")
-
-        # Manage backup rotation (keep max 5 regular backups)
-        manage_backup_rotation()
 
 
 def msg_info(*args, **kargs):
@@ -343,14 +285,13 @@ def save_file():
     match packer.detect_repacker(UNPACK_DIR).mode:
         case "PC":
             default_ext = ".sl2"
-            filetypes = SUPPORT_FILETYPES_PC
+            filetypes = (("Save File", "*.sl2 *.co2"), ("All Files", "*.*"))
         case "PS":
             default_ext = ".dat"
-            filetypes = SUPPORT_FILETYPES_PS
+            filetypes = (("Save File", "*memory.dat"), ("All Files", "*.*"))
         case _:
             default_ext = ""
-            filetypes = ()
-    filetypes += SUPPORT_FILETYPES_OTHER
+            filetypes = (("All Files", "*.*"),)
 
     output_file = filedialog.asksaveasfilename(
         defaultextension=default_ext,
@@ -360,9 +301,8 @@ def save_file():
         return False
 
     try:
-        if Path(output_file).exists():
-            backup_save(output_file)
-        packer.repack(UNPACK_DIR, output_file)
+        with create_backup(output_file, BACKUP_DIR, ConfigManager().max_backups):
+            packer.repack(UNPACK_DIR, output_file)
         ConfigManager().last_file = output_file
     except Exception as e:
         messagebox.showerror("Error", f"An error was occurred while saving file: {e}")
@@ -848,6 +788,12 @@ class ColorTheme:
         )
         self._style.configure(
             "TEntry",
+            fieldbackground=base["input_bg"],
+            foreground=base["text_main"],
+            insertcolor=base["insert_bg"],
+        )
+        self._style.configure(
+            "TSpinbox",
             fieldbackground=base["input_bg"],
             foreground=base["text_main"],
             insertcolor=base["insert_bg"],
@@ -1711,12 +1657,8 @@ class SaveEditorGUI:
 
         def on_add_to_preset(vessel_slot):
             hero_type = self.vessel_char_combo.current() + 1
-            preset_name = self.ask_for(
-                "New Preset Name",
-                "Enter name for new preset:",
-                input_type="printable_ascii",
-            ).strip()
-            if preset_name == "":
+            preset_name = ui.ask_for_preset_name(self.root)
+            if not preset_name:
                 return
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
@@ -2335,100 +2277,6 @@ class SaveEditorGUI:
             no_presets.pack(pady=20)
             bind_scroll_recursive(no_presets)
 
-    def ask_for(
-        self,
-        title: str,
-        prompt: str,
-        note: str = "",
-        input_type: Literal["integer", "printable_ascii","any"]="any",
-        initial="",
-        master: tk.Misc | None = None,
-    ):
-        """Open a dialog to ask the user for something"""
-
-        def validate(P: str):
-            match input_type:
-                case "integer":
-                    return P.isdigit() or P == ""
-                case "printable_ascii":
-                    return re.fullmatch(r"[\x20-\x7E]{0,18}", P) is not None
-            return True
-
-        master = master or self.root
-        vcmd = (master.register(validate), "%P")
-        dialog = tk.Toplevel(master)
-        self.color_theme.apply(dialog)
-        dialog.title(title)
-        lang_mgr.register(dialog, N_(title), attr="title")
-        dialog.transient(master)
-        dialog.grab_set()
-
-        main_frame = ttk.Frame(dialog)
-        main_frame.pack(expand=True, fill='both')
-        space = ttk.Frame(master=main_frame, height=20)
-        space.pack()
-
-        if note != "":
-            note_label = ttk.Label(main_frame, text=N_(note))
-            lang_mgr.register(note_label, N_(note))
-            note_label.pack(pady=10, padx=10)
-
-        entry_frame = ttk.Frame(main_frame)
-        entry_frame.pack(pady=10, padx=10)
-        label = ttk.Label(entry_frame, text=prompt)
-        lang_mgr.register(label, N_(prompt))
-        label.pack(side=tk.LEFT, padx=(0, 10))
-        var = tk.StringVar(value=initial)
-        entry = ttk.Entry(
-            entry_frame,
-            validate="key",
-            validatecommand=vcmd,
-            width=10 if input_type == "integer" else 30,
-            textvariable=var,
-        )
-        entry.pack(side=tk.LEFT)
-        entry.focus_set()
-
-        result = {"value": ""}  # Use a dict to pass value back
-
-        def on_ok():
-            result["value"] = var.get()
-            dialog.destroy()
-
-        def on_cancel():
-            result["value"] = ""
-            dialog.destroy()
-
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=10)
-
-        ok_button = ttk.Button(button_frame, text="OK", command=on_ok)
-        lang_mgr.register(ok_button, N_("OK"))
-        ok_button.pack(side=tk.LEFT, padx=10)
-        cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
-        lang_mgr.register(cancel_button, N_("Cancel"))
-        cancel_button.pack(side=tk.LEFT, padx=10)
-
-        dialog.withdraw()  # Hide initially to avoid flicker in wrong position
-        dialog.update_idletasks()  # Ensure geometry is calculated before positioning
-
-        parent_x = master.winfo_x()
-        parent_y = master.winfo_y()
-        parent_w = master.winfo_width()
-        parent_h = master.winfo_height()
-
-        dialog_w = dialog.winfo_width()
-        dialog_h = dialog.winfo_height()
-
-        x = parent_x + (parent_w - dialog_w) // 2
-        y = parent_y + (parent_h - dialog_h) // 2
-
-        dialog.geometry(f"+{x}+{y}")
-        dialog.deiconify()
-
-        master.wait_window(dialog)
-        return result["value"]
-
     def edit_preset_relics(self, preset_info):
         """Open dialog to edit relics in a preset"""
         # Debug at start of function
@@ -2497,13 +2345,7 @@ class SaveEditorGUI:
 
         # Header
         def on_header_click(_):
-            new_name = self.ask_for(
-                "New Preset Name",
-                "Enter name for new preset:",
-                initial=preset["name"],
-                input_type="printable_ascii",
-                master=dialog,
-            ).strip()
+            new_name = ui.ask_for_preset_name(dialog, preset["name"])
             # Restore grab (modal state) to this dialog
             # as the sub-dialog `ask_preset_name` stole it.
             if dialog.winfo_exists():
@@ -4388,7 +4230,9 @@ class SaveEditorGUI:
     def open_file(self):
         global userdata_path
 
-        file_path = filedialog.askopenfilename(filetypes=SUPPORT_FILETYPES)
+        file_path = filedialog.askopenfilename(
+            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+        )
         if not file_path:
             return
 
@@ -5227,13 +5071,8 @@ class SaveEditorGUI:
             msg_warning("Warning", "No relic selected")
             return
 
-        target_index_str = self.ask_for(
-            "Move Index",
-            "Move to After (#):",
-            note="Note: This will also affect the 'Acquisition Time' sorting in-game.",
-            input_type="integer",
-        )
-        if not target_index_str.isdigit():
+        target_index_str = ui.ask_for_move_index(self.root)
+        if not target_index_str:
             return
 
         target_index = int(target_index_str)
@@ -5663,10 +5502,10 @@ class SaveEditorGUI:
             )
             return
 
-        relic_type_selector = RelicTypeSelector(self.root)
-        if not relic_type_selector.result:
+        result = ui.ask_for_relic_type(self.root)
+        if not result:
             return
-        count = relic_type_selector.count
+
         stats = {
             "success_count": 0,
             "error": False,
@@ -5675,10 +5514,10 @@ class SaveEditorGUI:
         }
 
         def task():
-            for _ in range(count):
+            for _ in range(result.count):
                 try:
                     _, new_ga = self.inventory_handler.add_relic_to_inventory(
-                        relic_type_selector.result
+                        result.relic_type
                     )
                     stats["success_count"] += 1
                     stats["last_ga"] = new_ga
@@ -5901,7 +5740,9 @@ class SaveEditorGUI:
             messagebox.showerror("Error", "Please load a character first")
             return
 
-        import_save_file = filedialog.askopenfilename(filetypes=SUPPORT_FILETYPES)
+        import_save_file = filedialog.askopenfilename(
+            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+        )
         if not import_save_file:
             return
 
@@ -5975,8 +5816,8 @@ class ModifyRelicDialog:
         self.dialog.transient(parent)
         self._set_position(parent)
 
-        self.safe_mode_var = tk.BooleanVar(value=True)
-        self.auto_fix_var = tk.BooleanVar(value=True)
+        self.safe_mode_var = ui.vars.safe_mode
+        self.auto_fix_var = ui.vars.auto_fix
         self.game_data = SourceDataHandler()
         self.relic_checker = RelicChecker()
         self.inventory = InventoryHandler()
@@ -7987,114 +7828,6 @@ class SearchDialog:
         self.dialog.destroy()
 
 
-class RelicTypeSelector(tk.Toplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Select Relic Type")
-        self.result = None
-        self.count = 1
-
-        self.resizable(False, False)
-
-        main_frame = ttk.Frame(self, padding="10 10 10 10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(
-            main_frame,
-            text="Select relic type to create.\nNote: Type cannot be changed later.",
-            justify=tk.CENTER,
-        ).pack(pady=10)
-
-        quantity_frame = ttk.Frame(main_frame)
-        quantity_frame.pack(pady=(0, 10))
-
-        ttk.Label(
-            quantity_frame,
-            text="Quantity:",
-        ).pack(side=tk.LEFT, padx=(0, 5))
-
-        self.quantity_var = tk.StringVar(value=str(self.count))
-        quantity_entry = ttk.Spinbox(
-            quantity_frame,
-            textvariable=self.quantity_var,
-            width=10,
-            from_=1,
-            to=999,
-            style="TEntry",
-        )
-        quantity_entry.pack(side=tk.LEFT)
-
-        def on_validate_input(val: str):
-            if val == "":
-                return True
-            try:
-                count = int(val)
-            except ValueError:
-                return False
-            return 1 <= count <= 999
-
-        vcmd = (self.register(on_validate_input), "%P")
-        quantity_entry.config(validate="key", validatecommand=vcmd)
-
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(pady=5)
-
-        ttk.Button(
-            btn_frame,
-            text="Normal",
-            command=lambda: self.set_result("normal"),
-            style="NormalRelic.TButton",
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            btn_frame,
-            text="Deep",
-            command=lambda: self.set_result("deep"),
-            style="DeepRelic.TButton",
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            btn_frame, text="Cancel", command=lambda: self.set_result(None)
-        ).pack(side=tk.LEFT, padx=5)
-
-        self.protocol("WM_DELETE_WINDOW", lambda: self.set_result(None))
-
-        self.center_window(parent)
-        self.focus_force()
-        quantity_entry.focus_set()
-        quantity_entry.select_range(0, tk.END)
-        quantity_entry.icursor(tk.END)
-
-        self.transient(parent)
-        self.grab_set()
-        self.wait_window(self)
-
-    def center_window(self, parent):
-        self.update_idletasks()
-
-        w = self.winfo_width()
-        h = self.winfo_height()
-
-        parent_w = parent.winfo_width()
-        parent_h = parent.winfo_height()
-        parent_x = parent.winfo_x()
-        parent_y = parent.winfo_y()
-
-        x = parent_x + (parent_w // 2) - (w // 2)
-        y = parent_y + (parent_h // 2) - (h // 2)
-
-        self.geometry(f"+{x}+{y}")
-
-    def set_result(self, value):
-        try:
-            quantity = int(self.quantity_var.get())
-            if quantity < 1:
-                quantity = 1
-        except ValueError:
-            quantity = 1
-        self.count = quantity
-        self.result = value
-        self.destroy()
-
-
 class LoadoutSelector(tk.Toplevel):
     """
     Advanced Loadout Import Dialog with fixed effect/curse slicing logic.
@@ -8305,7 +8038,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 
 def main():
-    root = tk.Tk()
+    root = ui.root
     app = SaveEditorGUI(root)
     root.report_callback_exception = handle_exception
     root.mainloop()
