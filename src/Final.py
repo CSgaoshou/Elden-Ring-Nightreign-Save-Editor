@@ -3857,17 +3857,17 @@ class SaveEditorGUI:
         lang_mgr.register(btn_refresh, N_("🔄 Refresh Inventory"))
         btn_refresh.pack(side="left", padx=5)
 
-        btn_export = ttk.Button(
-            controls_frame, text="📤 Export to Excel", command=self.export_relics
-        )
-        lang_mgr.register(btn_export, N_("📤 Export to Excel"))
-        btn_export.pack(side="left", padx=5)
+        # btn_export = ttk.Button(
+        #     controls_frame, text="📤 Export to Excel", command=self.export_relics
+        # )
+        # lang_mgr.register(btn_export, N_("📤 Export to Excel"))
+        # btn_export.pack(side="left", padx=5)
 
-        btn_import = ttk.Button(
-            controls_frame, text="📥 Import from Excel", command=self.import_relics
-        )
-        lang_mgr.register(btn_import, N_("📥 Import from Excel"))
-        btn_import.pack(side="left", padx=5)
+        # btn_import = ttk.Button(
+        #     controls_frame, text="📥 Import from Excel", command=self.import_relics
+        # )
+        # lang_mgr.register(btn_import, N_("📥 Import from Excel"))
+        # btn_import.pack(side="left", padx=5)
 
         btn_delete_all = ttk.Button(
             controls_frame,
