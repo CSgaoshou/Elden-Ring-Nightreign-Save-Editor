@@ -40,6 +40,10 @@ class LanguageManager:
         :param kwargs: Optional formatting variables for the string.
         """
         with self._list_lock:
+            self.clean_up()
+            if any(entry["widget"] is widget for entry in self._widgets):
+                return
+
             entry = {
                 "widget": widget,
                 "key": text_key,
@@ -51,6 +55,11 @@ class LanguageManager:
         # Initial translation update
         self._update_widget(entry)
 
+    def clean_up(self):
+        self._widgets = [
+            item for item in self._widgets if item["widget"].winfo_exists()
+        ]
+
     def refresh_all(self):
         """
         Thread-safe refresh of all registered widgets.
@@ -58,7 +67,7 @@ class LanguageManager:
         """
         with self._list_lock:
             # 1. Filter out destroyed widgets to prevent memory leaks
-            self._widgets = [item for item in self._widgets if item["widget"].winfo_exists()]
+            self.clean_up()
 
             # 2. Batch update remaining widgets
             for item in self._widgets:
