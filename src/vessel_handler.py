@@ -244,6 +244,8 @@ class VesselParser:
     ITEM_TYPE_ARMOR = 0x90000000
     ITEM_TYPE_RELIC = 0xC0000000
 
+    MAX_PRESET_SLOT = 100
+
     def __init__(self):
         self.game_data = SourceDataHandler()  # Singleton
         self.inventory = InventoryHandler()  # Singleton
@@ -353,7 +355,7 @@ class VesselParser:
         preset_index = 0
         counter_0_found = False
         LoadoutHandler().unused_preset_slots.clear()
-        while cursor < len(globals.data):
+        for _ in range(self.MAX_PRESET_SLOT):
             p_start = cursor
 
             # Offsets for custom preset fields
