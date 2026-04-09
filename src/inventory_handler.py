@@ -120,6 +120,26 @@ class ItemState:
         self.durability = self.item_id
 
     @property
+    def relic(self):
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return SourceDataHandler().relics[self.real_item_id]
+
+    @property
+    def name(self) -> str:
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.relic.name
+
+    @property
+    def is_unique(self):
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.real_item_id in UNIQUENESS_IDS
+
+    @property
+    def is_deep(self) -> bool:
+        assert self.type_bits == ITEM_TYPE_RELIC
+        return self.relic.is_deep()
+
+    @property
     def durability(self):
         if self.type_bits != ITEM_TYPE_RELIC:
             return None
@@ -563,10 +583,11 @@ class InventoryHandler:
                 logger.info("Updating entry count in")
                 struct.pack_into("<I", globals.data, self.entry_count_offset, self.entry_count)
 
-    def update_entry_data(self, entry_index):
+    def update_entry_data(self, entry_index: int, parse_after_update=True):
         target_offset = self.entry_offset + entry_index * 14
         globals.data = globals.data[:target_offset] + self.entries[entry_index].data_bytes + globals.data[target_offset + 14:]
-        self.parse()  # Just make sure everything is fine
+        if parse_after_update:
+            self.parse()
 
     def add_relic_to_inventory(self, relic_type: str = "normal"):
         with self._lock:
@@ -790,10 +811,62 @@ class InventoryHandler:
                 self.relics[ga_handle].mark_favorite()
             for idx, entry in enumerate(self.entries):
                 if entry.ga_handle == ga_handle:
-                    self.update_entry_data(idx)
+                    self.update_entry_data(idx, False)
             return self.relics[ga_handle].is_favorite
         except KeyError:
             raise ValueError("Relic not found in inventory")
+
+    def stringify_relic_effects(self, ga_handles: list[int]):
+        output = ""
+        for ga_handle in ga_handles:
+            relic = self.relics[ga_handle].state
+            effects = [
+                -1 if eff in (0, 0xFFFFFFFF) else eff
+                for eff in relic.effects_and_curses
+            ]
+            output += " | ".join(str(eff) for eff in effects) + "\n"
+        return output.strip()
+
+    def parse_effects(self, effects_string: str) -> list[list[int]]:
+        result = []
+        lines = effects_string.strip().split("\n")
+        for n, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            effects = [
+                0xFFFFFFFF if int(eff) == -1 else int(eff) for eff in line.split("|")
+            ]
+            if len(effects) != 6:
+                raise ValueError(f"Not enough effects (line: {n+1})")
+            result.append(effects)
+        return result
+
+    def reindex_acquisition_id_at(self, start_acquisition_id: int, *ga_handles: int):
+        """
+        Reindexes acquisition IDs starting from a specific value for the given handles.
+
+        This method assigns sequential IDs to entries matching ga_handles starting at
+        start_acquisition_id. To prevent ID collisions, any existing entries with an
+        ID greater than or equal to the start value are shifted forward.
+
+        Args:
+            start_acquisition_id: The base ID to start assigning from.
+            *ga_handles: The target handles to be repositioned or updated.
+        """
+        for i, entry in enumerate(self.entries):
+            if entry.ga_handle in ga_handles:
+                entry.acquisition_id = start_acquisition_id + ga_handles.index(
+                    entry.ga_handle
+                )
+                self.update_entry_data(i, False)
+            elif entry.acquisition_id >= start_acquisition_id:
+                entry.acquisition_id += len(ga_handles)
+                self.update_entry_data(i, False)
+        # self.parse will calculate new last acquisition id
+        # so we don't need to update it here
+        # self._cur_last_acquisition_id += len(ga_handles)
+        self.parse()
 
     def refresh_relics_dataframe(self):
         cols = ['ga_handle', 'relic_id', 'effect_1', 'effect_2', 'effect_3',

@@ -244,6 +244,8 @@ class VesselParser:
     ITEM_TYPE_ARMOR = 0x90000000
     ITEM_TYPE_RELIC = 0xC0000000
 
+    MAX_PRESET_SLOT = 100
+
     def __init__(self):
         self.game_data = SourceDataHandler()  # Singleton
         self.inventory = InventoryHandler()  # Singleton
@@ -351,8 +353,9 @@ class VesselParser:
 
         # 3. Custom Presets Section
         preset_index = 0
+        counter_0_found = False
         LoadoutHandler().unused_preset_slots.clear()
-        while cursor < len(globals.data):
+        for _ in range(self.MAX_PRESET_SLOT):
             p_start = cursor
 
             # Offsets for custom preset fields
@@ -399,8 +402,13 @@ class VesselParser:
             else:
                 raise RuntimeError(f"Unknown hero ID {h_id}.")
 
+            # Usually, a counter value of 0 signals the last valid preset.
+            # However, there are very few cases where additional presets follow the first 0;
+            # we continue parsing until a second 0 is encountered since the rest of the block is all 0s.
             if counter_val == 0:
-                break
+                if counter_0_found:
+                    break
+                counter_0_found = True
         self.heroes = heroes
 
     def display_results(self):
@@ -816,7 +824,8 @@ class LoadoutHandler:
         self._sort_preset()
 
         # Patch globals.data
-        globals.data[base_offset] = 0x00  # Removed sign
+        struct.pack_into("<B", globals.data, base_offset, 0)  # header = 0
+        struct.pack_into("<H", globals.data, base_offset + 1, 0)  # hero type = 0
 
         # Update heroes
         self.heroes[preset["hero_type"]].presets.remove(preset)

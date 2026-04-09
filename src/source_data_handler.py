@@ -34,6 +34,28 @@ def df_filter_zero_chanceWeight(effects: pd.DataFrame) -> pd.DataFrame:
     return _effs
 
 
+@functools.cache
+def _get_name_wrapped(table_type: Literal["effect", "relic"], item_id: int):
+    match table_type:
+        case "effect":
+            name_df = SourceDataHandler().effect_name
+        case "relic":
+            name_df = SourceDataHandler().relic_name
+        case _:
+            raise ValueError(f"Unknown table type: {table_type}")
+    if name_df is None:
+        raise RuntimeError(f"The {table_type} table is not currently initialized")
+    row = name_df[name_df["id"] == item_id]
+    if row.empty:
+        return "Unknown"
+    val = row["text"].iloc[0]
+    return str(val) if val is not None else "Unknown"
+
+
+def get_name(table_type: Literal["effect", "relic"], item_id: int):
+    return _get_name_wrapped(table_type, item_id)
+
+
 class AttachEffect:
     def __init__(self, effect_df: pd.DataFrame, name_df: pd.DataFrame, effect_id: int):
         self._data_frame = effect_df[effect_df.index == effect_id]
@@ -46,18 +68,9 @@ class AttachEffect:
     def name(self):
         if self._is_empty_id:
             return "Empty"
-        elif self._is_unknown:
+        if self._is_unknown:
             return "Unknown"
-        else:
-            try:
-                row = self._name_df[self._name_df["id"] == self.text_id]
-                if not row.empty:
-                    text = row["text"].values[0]
-                    text = " ".join(text.split("\n"))
-                    return text
-                return "Unknown"
-            except Exception:
-                return "Unknown"
+        return get_name("effect", self.text_id)
 
     @property
     def conflict_id(self):
@@ -106,16 +119,9 @@ class Relic:
     def name(self):
         if self._is_empty_id:
             return "Empty"
-        elif self._is_unknown:
+        if self._is_unknown:
             return "Unknown"
-        else:
-            try:
-                row = self._name_df[self._name_df["id"] == self.id]
-                if not row.empty:
-                    return row["text"].values[0]
-                return "Unknown"
-            except Exception:
-                return "Unknown"
+        return get_name("relic", self.id)
 
     @property
     def color(self):
@@ -448,39 +454,42 @@ class SourceDataHandler:
         if self.vessel_names is None:
             self.vessel_names = _vessel_names
         else:
-            _vessel_names.set_index('id')
-            self.vessel_names.set_index('id')
+            self.vessel_names.set_index("id", inplace=True)
+            _vessel_names.set_index("id", inplace=True)
             self.vessel_names.update(_vessel_names)
-            self.vessel_names.reset_index()
+            self.vessel_names.reset_index(inplace=True)
         logger.info("Setting NPC Names...")
         if self.npc_name is None:
             self.npc_name = _npc_names
         else:
-            self.npc_name.set_index('id')
-            _npc_names.set_index('id')
+            self.npc_name.set_index("id", inplace=True)
+            _npc_names.set_index("id", inplace=True)
             self.npc_name.update(_npc_names)
-            self.npc_name.reset_index()
+            self.npc_name.reset_index(inplace=True)
         logger.info("Setting Relic Names...")
         if self.relic_name is None:
             self.relic_name = _relic_names
         else:
-            self.relic_name.set_index('id')
-            _relic_names.set_index('id')
+            self.relic_name.set_index("id", inplace=True)
+            _relic_names.set_index("id", inplace=True)
             self.relic_name.update(_relic_names)
-            self.relic_name.reset_index()
+            self.relic_name.reset_index(inplace=True)
         logger.info("Setting Effect Names...")
         if self.effect_name is None:
             self.effect_name = _effect_names
         else:
-            self.effect_name.set_index('id')
-            _effect_names.set_index('id')
+            self.effect_name.set_index("id", inplace=True)
+            _effect_names.set_index("id", inplace=True)
+            _effect_names = _effect_names[~_effect_names.index.duplicated(keep="last")]
             self.effect_name.update(_effect_names)
-            self.effect_name.reset_index()
+            self.effect_name.reset_index(inplace=True)
 
     def reload_text(self, language: str = "en_US"):
         logger.info(f"Reloading text for language: {language}")
         try:
             self._load_text(language=language)
+            logger.info("Clear Names Cache...")
+            _get_name_wrapped.cache_clear()
             return True
         except FileNotFoundError:
             self._load_text()
@@ -608,18 +617,9 @@ class SourceDataHandler:
         logger.debug(f"Getting rollable effects for {pool_type} pool")
         return self._get_rollable_effects_wrapped(pool_type)
 
-    def get_pool_rollable_effects(self, pool_id: int):
-        """Get effects that can actually roll in a pool (chanceWeight != 0).
-
-        Effects with weight -65536 are disabled (cannot roll).
-        Effects with weight 0 are class-specific effects that cannot naturally roll.
-        Other weights (including other negative values) are valid rollable weights.
-
-        For deep pools (2000000, 2100000, 2200000), returns effects that have
-        rollable weight in ANY of the three deep pools, since the game appears
-        to allow effects to roll on any deep relic if they're valid in any deep pool.
-        """
-        logger.debug(f"Getting rollable effects for pool {pool_id}")
+    @functools.cache
+    def _get_pool_rollable_effects_wrapped(self, pool_id: int):
+        logger.debug(f"Caching rollable effects for pool {pool_id}")
         if pool_id == -1:
             return []
 
@@ -637,6 +637,29 @@ class SourceDataHandler:
         _effects = df_filter_zero_chanceWeight(_effects)
         return _effects["attachEffectId"].values.tolist()
 
+    def get_pool_rollable_effects(self, pool_id: int):
+        """Get effects that can actually roll in a pool (chanceWeight != 0).
+
+        Effects with weight -65536 are disabled (cannot roll).
+        Effects with weight 0 are class-specific effects that cannot naturally roll.
+        Other weights (including other negative values) are valid rollable weights.
+
+        For deep pools (2000000, 2100000, 2200000), returns effects that have
+        rollable weight in ANY of the three deep pools, since the game appears
+        to allow effects to roll on any deep relic if they're valid in any deep pool.
+        """
+        logger.debug(f"Getting rollable effects for pool {pool_id}")
+        return self._get_pool_rollable_effects_wrapped(pool_id)
+
+    @functools.cache
+    def _get_pool_effects_strict_wrapped(self, pool_id: int):
+        logger.debug(f"Caching strict effects for pool {pool_id}")
+        if pool_id == -1:
+            return []
+        _effects = self.effect_table[self.effect_table["ID"] == pool_id]
+        _effects = df_filter_zero_chanceWeight(_effects)
+        return _effects["attachEffectId"].values.tolist()
+
     def get_pool_effects_strict(self, pool_id: int):
         """Get effects that can roll in a SPECIFIC pool (chanceWeight != 0).
 
@@ -645,11 +668,7 @@ class SourceDataHandler:
         deep pool but not in the specific pool assigned to a relic.
         """
         logger.debug(f"Getting strict effects for pool {pool_id}")
-        if pool_id == -1:
-            return []
-        _effects = self.effect_table[self.effect_table["ID"] == pool_id]
-        _effects = df_filter_zero_chanceWeight(_effects)
-        return _effects["attachEffectId"].values.tolist()
+        return self._get_pool_effects_strict_wrapped(pool_id)
 
     def get_effect_pools(self, effect_id: int):
         """Get all pool IDs that contain a specific effect."""
@@ -657,13 +676,18 @@ class SourceDataHandler:
         _pools = self.effect_table[self.effect_table["attachEffectId"] == effect_id]
         return _pools["ID"].values.tolist()
 
-    def get_effect_rollable_pools(self, effect_id: int):
-        """Get all pool IDs where this effect can actually roll (chanceWeight != 0)."""
-        logger.debug(f"Getting rollable pools for effect {effect_id}")
+    @functools.cache
+    def _get_effect_rollable_pools_wrapped(self, effect_id: int):
+        logger.debug(f"Caching rollable pools for effect {effect_id}")
         _rows = self.effect_table[self.effect_table["attachEffectId"] == effect_id]
         # Filter out rows where chanceWeight is 0 (cannot roll)
         _rollable = df_filter_zero_chanceWeight(_rows)
         return _rollable["ID"].values.tolist()
+
+    def get_effect_rollable_pools(self, effect_id: int):
+        """Get all pool IDs where this effect can actually roll (chanceWeight != 0)."""
+        logger.debug(f"Getting rollable pools for effect {effect_id}")
+        return self._get_effect_rollable_pools_wrapped(effect_id)
 
     def is_deep_only_effect(self, effect_id: int):
         """Check if an effect only exists in deep relic pools (2000000, 2100000, 2200000)
