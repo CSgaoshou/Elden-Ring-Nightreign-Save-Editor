@@ -5947,9 +5947,12 @@ class ModifyRelicDialog:
         self._update_color_display()
         self._update_relic_structure_display()
         self._update_relic_type_display()
-        item_id = int(self.item_id_entry.get())
-        item_name = self.game_data.relics[item_id].name
-        self.title_var.set(item_name)
+        try:
+            item_id = int(self.item_id_entry.get())
+            item_name = self.game_data.relics[item_id].name
+            self.title_var.set(item_name)
+        except:
+            self.title_var.set("Unknown")
 
     def _update_relic_type_display(self):
         """Update the relic type indicator (Original vs Scene/1.02)"""
