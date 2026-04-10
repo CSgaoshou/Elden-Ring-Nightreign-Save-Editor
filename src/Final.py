@@ -7393,13 +7393,13 @@ class ModifyRelicDialog:
         self.effect_entries[effect_index].insert(0, str(effect_id))
         self.on_effect_change(effect_index)
 
-    def fix_invalid_entry(self):
+    def auto_fix_entries(self):
         for entry in self.effect_entries:
             try:
                 value = int(entry.get())
             except ValueError:
                 value = 0xFFFFFFFF
-            if value not in self.game_data.effects:
+            if value == 0 or value not in self.game_data.effects:
                 value = 0xFFFFFFFF
             entry.delete(0, tk.END)
             entry.insert(0, str(value))
@@ -7408,7 +7408,7 @@ class ModifyRelicDialog:
         assert self.relic_checker is not None, "Relic checker not initialized"
 
         if self.auto_fix_var.get():
-            self.fix_invalid_entry()
+            self.auto_fix_entries()
             self.auto_sort_effects()
 
         # Extract effect IDs from entries
