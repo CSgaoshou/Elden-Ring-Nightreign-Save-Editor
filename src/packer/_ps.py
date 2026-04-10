@@ -61,7 +61,11 @@ class PSPacker(Packer):
 
     @classmethod
     def probe_repack(cls, input_dir):
-        return (input_dir / FILE_REGULATION).exists()
+        headers_path = (input_dir / "HEADER")
+        if not headers_path.exists():
+            return False
+        with headers_path.open("rb") as f:
+            return f.read(4) == HEADER_MAGIC
 
     def unpack(self, file_path, output_dir):
         shutil.rmtree(output_dir, ignore_errors=True)

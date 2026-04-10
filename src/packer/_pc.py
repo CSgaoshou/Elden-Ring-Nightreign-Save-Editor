@@ -179,7 +179,11 @@ class PCPacker(Packer):
 
     @classmethod
     def probe_repack(cls, input_dir):
-        return (input_dir / "HEADER").exists()
+        headers_path = (input_dir / "HEADER")
+        if not headers_path.exists():
+            return False
+        with headers_path.open("rb") as f:
+            return f.read(4) == BND4_MAGIC
 
     def unpack(self, file_path, output_dir):
         raw_data = file_path.read_bytes()
