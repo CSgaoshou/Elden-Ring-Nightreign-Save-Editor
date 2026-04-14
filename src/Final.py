@@ -3925,24 +3925,30 @@ class SaveEditorGUI:
             legend_frame, text="", foreground="red", font=("Arial", 9, "bold")
         )
         self.illegal_count_label.pack(side="left", padx=(0, 15))
+        self.illegal_count_label.bind(
+            "<Button-1>", lambda e: self.set_status_filter("Illegal")
+        )
 
         lb_red = ttk.Label(
             legend_frame, text="Red = Illegal", style="illegal.TLabel"
         )
         lang_mgr.register(lb_red, N_("Red = Illegal"))
         lb_red.pack(side="left", padx=5)
+        lb_red.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         lb_purple = ttk.Label(
             legend_frame, text="Purple = Missing Curse", style="MissingCurse.TLabel"
         )
         lang_mgr.register(lb_purple, N_("Purple = Missing Curse"))
         lb_purple.pack(side="left", padx=5)
+        lb_purple.bind("<Button-1>", lambda e: self.set_status_filter("Curse Illegal"))
 
         lb_teal = ttk.Label(
             legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
         )
         lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
         lb_teal.pack(side="left", padx=5)
+        lb_teal.bind("<Button-1>", lambda e: self.set_status_filter("Strict Invalid"))
 
         lb_orange = ttk.Label(
             legend_frame,
@@ -3951,12 +3957,14 @@ class SaveEditorGUI:
         )
         lang_mgr.register(lb_orange, N_("Orange = Unique Relic (don't edit)"))
         lb_orange.pack(side="left", padx=5)
+        lb_orange.bind("<Button-1>", lambda e: self.set_status_filter("Forbidden"))
 
         lb_blue = ttk.Label(
             legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
         )
         lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
         lb_blue.pack(side="left", padx=5)
+        lb_blue.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         # Search frame - Row 1: Basic search and filters
         search_frame = ttk.Frame(self.inventory_tab)
@@ -4469,10 +4477,12 @@ class SaveEditorGUI:
         # Update illegal count label
         if self.inventory_handler.illegal_count > 0:
             self.illegal_count_label.config(
-                text=f"⚠️ {self.inventory_handler.illegal_count} Illegal Relic(s) Found"
+                text=_("⚠️ {count} Illegal Relic(s) Found").format(
+                    count=self.inventory_handler.illegal_count
+                )
             )
         else:
-            self.illegal_count_label.config(text="✓ All Relics Valid")
+            self.illegal_count_label.config(text=_("✓ All Relics Valid"))
 
         # Backup original order
         if hasattr(self, "all_relics"):
@@ -4634,6 +4644,14 @@ class SaveEditorGUI:
             self.sort_by_column("#")
 
         self.run_task_async(heavy_loading, (), "Loading...", callback=complete)
+
+    def set_status_filter(self, status: str):
+        if self.status_filter_var.get() == status:
+            self.status_filter_var.set("All")
+        else:
+            self.status_filter_var.set(status)
+        self.status_filter_combo.selection_range(0, tk.END)
+        self.filter_relics()
 
     def filter_relics(self):
         """Filter relics based on search term and all filter criteria"""

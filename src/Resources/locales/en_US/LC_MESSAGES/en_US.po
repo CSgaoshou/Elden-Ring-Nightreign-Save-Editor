@@ -2,7 +2,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-04-08 23:05+0800\n"
+"POT-Creation-Date: 2026-04-14 16:06+0800\n"
 "PO-Revision-Date: 2026-02-07 18:55+0800\n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -13,51 +13,64 @@ msgstr ""
 "X-Generator: Poedit 3.8\n"
 "X-Poedit-Basepath: .\n"
 
-#: src\Final.py:1199
+#: src\Final.py:294
+msgid "Steam ID re-sign"
+msgstr ""
+
+#: src\Final.py:296
+#, python-brace-format
+msgid ""
+"You are saving to a path belonging to Steam ID {target_id},\n"
+"which does not match the current Steam ID {current_id}.\n"
+"\n"
+"Would you like to re-sign the save file to Steam ID {target_id}?"
+msgstr ""
+
+#: src\Final.py:1231
 msgid "File Management"
 msgstr "File Management"
 
-#: src\Final.py:1201
+#: src\Final.py:1233
 msgid "Relics"
 msgstr "Relics"
 
-#: src\Final.py:1203
+#: src\Final.py:1235
 msgid "Vessels"
 msgstr "Vessels"
 
-#: src\Final.py:1390
+#: src\Final.py:1421
 msgid "Save File Management"
 msgstr "Save File Management"
 
-#: src\Final.py:1398
+#: src\Final.py:1429
 msgid "Load your Elden Ring Nightreign save file to begin editing"
 msgstr "Load your Elden Ring Nightreign save file to begin editing"
 
-#: src\Final.py:1404
+#: src\Final.py:1435
 msgid "📁 Open Save File"
 msgstr "📁 Open Save File"
 
-#: src\Final.py:1412
+#: src\Final.py:1443
 msgid "💾 Save Modified File"
 msgstr "💾 Save Modified File"
 
-#: src\Final.py:1420
+#: src\Final.py:1451
 msgid "📥 Replace Character"
 msgstr "📥 Replace Character"
 
-#: src\Final.py:1427
+#: src\Final.py:1458
 msgid "Settings"
 msgstr "Settings"
 
-#: src\Final.py:1437
+#: src\Final.py:1468
 msgid "Language:"
 msgstr "Language:"
 
-#: src\Final.py:1456
+#: src\Final.py:1487
 msgid "Theme:"
 msgstr "Theme:"
 
-#: src\Final.py:1479
+#: src\Final.py:1510
 msgid ""
 "Reduce Message Pop: This will remove certain potentially unnecessary success "
 "messages."
@@ -65,210 +78,241 @@ msgstr ""
 "Reduce Message Pop: This will remove certain potentially unnecessary success "
 "messages."
 
-#: src\Final.py:1487
+#: src\Final.py:1518
 msgid "Character Statistics"
 msgstr "Character Statistics"
 
-#: src\Final.py:1497
+#: src\Final.py:1528
 msgid "Murks:"
 msgstr "Murks:"
 
-#: src\Final.py:1506 src\Final.py:1525
+#: src\Final.py:1537 src\Final.py:1556
 msgid "Edit"
 msgstr "Edit"
 
-#: src\Final.py:1516
+#: src\Final.py:1547
 msgid "Sigs:"
 msgstr "Sigs:"
 
-#: src\Final.py:1531
+#: src\Final.py:1562
 msgid "🔄 Refresh Stats"
 msgstr "🔄 Refresh Stats"
 
-#: src\Final.py:1538
+#: src\Final.py:1569
 msgid "Select Character"
 msgstr "Select Character"
 
-#: src\Final.py:1546
+#: src\Final.py:1577
 msgid "Choose a character to load:"
 msgstr "Choose a character to load:"
 
-#: src\Final.py:1574
+#: src\Final.py:1605
 msgid "🔄 Refresh"
 msgstr "🔄 Refresh"
 
-#: src\Final.py:1579
+#: src\Final.py:1610
 msgid "💾 Save Loadout"
 msgstr "💾 Save Loadout"
 
-#: src\Final.py:1584
+#: src\Final.py:1615
 msgid "📂 Load Loadout"
 msgstr "📂 Load Loadout"
 
-#: src\Final.py:1589
+#: src\Final.py:1620
 msgid "Character:"
 msgstr "Character:"
 
-#: src\Final.py:1701
+#: src\Final.py:1732
 msgid "➕ Add to Preset"
 msgstr "➕ Add to Preset"
 
-#: src\Final.py:1770
+#: src\Final.py:1801
 msgid "📁 Saved Presets"
 msgstr "📁 Saved Presets"
 
-#: src\Final.py:1835
+#: src\Final.py:1866
 #, python-brace-format
 msgid "✅ Unlocked ({relic_count}/6 relics)"
 msgstr "✅ Unlocked ({relic_count}/6 relics)"
 
-#: src\Final.py:1846
+#: src\Final.py:1877
 #, python-brace-format
 msgid "⚠️ Locked (Unlock Flag: {unlock_flag})"
 msgstr "⚠️ Locked (Unlock Flag: {unlock_flag})"
 
-#: src\Final.py:2225
+#: src\Final.py:2256
 msgid "⚙️ Equip Preset"
 msgstr "⚙️ Equip Preset"
 
-#: src\Final.py:2232
+#: src\Final.py:2263
 msgid "✏️ Edit Preset"
 msgstr "✏️ Edit Preset"
 
-#: src\Final.py:2240
+#: src\Final.py:2271
 msgid "❌ Delete Preset"
 msgstr "❌ Delete Preset"
 
-#: src\Final.py:2276
+#: src\Final.py:2307
 msgid "No saved presets for this character"
 msgstr "No saved presets for this character"
 
-#: src\Final.py:3851
+#: src\Final.py:3882
 msgid "➕ Add Relic"
 msgstr "➕ Add Relic"
 
-#: src\Final.py:3857
+#: src\Final.py:3888
 msgid "🔄 Refresh Inventory"
 msgstr "🔄 Refresh Inventory"
 
-#: src\Final.py:3863
-msgid "📤 Export to Excel"
-msgstr "📤 Export to Excel"
-
-#: src\Final.py:3869
-msgid "📥 Import from Excel"
-msgstr "📥 Import from Excel"
-
-#: src\Final.py:3878
+#: src\Final.py:3909
 msgid "🗑️ Delete All Illegal"
 msgstr "🗑️ Delete All Illegal"
 
-#: src\Final.py:3884
+#: src\Final.py:3915
 msgid "🔧 Mass Fix"
 msgstr "🔧 Mass Fix"
 
-#: src\Final.py:3901
+#: src\Final.py:3935
 msgid "Red = Illegal"
 msgstr "Red = Illegal"
 
-#: src\Final.py:3907
+#: src\Final.py:3942
 msgid "Purple = Missing Curse"
 msgstr "Purple = Missing Curse"
 
-#: src\Final.py:3913
+#: src\Final.py:3949
 msgid "Teal = Strict Invalid"
 msgstr "Teal = Strict Invalid"
 
-#: src\Final.py:3921
+#: src\Final.py:3958
 msgid "Orange = Unique Relic (don't edit)"
 msgstr "Orange = Unique Relic (don't edit)"
 
-#: src\Final.py:3927
+#: src\Final.py:3965
 msgid "Blue = Illegal Unique"
 msgstr "Blue = Illegal Unique"
 
-#: src\Final.py:3935
+#: src\Final.py:3974
 msgid "🔍 Search:"
 msgstr "🔍 Search:"
 
-#: src\Final.py:3947
+#: src\Final.py:3986
 msgid "in:"
 msgstr "in:"
 
-#: src\Final.py:3972
+#: src\Final.py:4011
 msgid "Clear"
 msgstr "Clear"
 
-#: src\Final.py:3979
+#: src\Final.py:4018
 msgid "👤 Char:"
 msgstr "👤 Char:"
 
-#: src\Final.py:3997
+#: src\Final.py:4036
 msgid "🎨 Color:"
 msgstr "🎨 Color:"
 
-#: src\Final.py:4015
+#: src\Final.py:4054
 msgid "⚠️ Status:"
 msgstr "⚠️ Status:"
 
-#: src\Final.py:4141
+#: src\Final.py:4180
 msgid "Modify Selected"
 msgstr "Modify Selected"
 
-#: src\Final.py:4149
+#: src\Final.py:4188
 msgid "Delete Selected"
 msgstr "Delete Selected"
 
-#: src\Final.py:4159
+#: src\Final.py:4198
 msgid "Select All"
 msgstr "Select All"
 
-#: src\Final.py:4164
+#: src\Final.py:4203
 msgid "Deselect All"
 msgstr "Deselect All"
 
-#: src\Final.py:4178
+#: src\Final.py:4217
 #, python-brace-format
 msgid "{selected_count} selected"
 msgstr "{selected_count} selected"
 
-#: src\ui\move_index_dialog.py:12
+#: src\Final.py:4407 src\Final.py:4434
+msgid "Confirm"
+msgstr ""
+
+#: src\Final.py:4409
+msgid "Modifying Murks would get you banned. Are you sure you want to proceed?"
+msgstr ""
+
+#: src\Final.py:4418
+msgid "Modify Murks"
+msgstr ""
+
+#: src\Final.py:4419 src\Final.py:4444
+msgid "Enter new value:"
+msgstr ""
+
+#: src\Final.py:4435
+msgid "Modifying Sigs would get you banned. Are you sure you want to proceed?"
+msgstr ""
+
+#: src\Final.py:4443
+msgid "Modify Sigs"
+msgstr ""
+
+#: src\Final.py:4480
+#, python-brace-format
+msgid "⚠️ {count} Illegal Relic(s) Found"
+msgstr ""
+
+#: src\Final.py:4485
+msgid "✓ All Relics Valid"
+msgstr ""
+
+#: src\Final.py:5141
 msgid "Move Index"
 msgstr ""
 
-#: src\ui\move_index_dialog.py:17
+#: src\Final.py:5142
 msgid "Move to After (#):"
 msgstr ""
 
-#: src\ui\move_index_dialog.py:35 src\ui\preset_name_dialog.py:53
-msgid "OK"
-msgstr "OK"
-
-#: src\ui\move_index_dialog.py:38 src\ui\preset_name_dialog.py:56
-msgid "Cancel"
-msgstr "Cancel"
-
-#: src\ui\move_index_dialog.py:53
+#: src\Final.py:5144
 msgid "Note: This will also affect the 'Acquisition Time' sorting in-game."
 msgstr ""
 
-#: src\ui\preset_name_dialog.py:19
+#: src\ui\int_dialog.py:43 src\ui\preset_name_dialog.py:52
+msgid "OK"
+msgstr "OK"
+
+#: src\ui\int_dialog.py:46 src\ui\preset_name_dialog.py:58
+msgid "Cancel"
+msgstr "Cancel"
+
+#: src\ui\preset_name_dialog.py:17
 msgid "New Preset Name"
 msgstr "New Preset Name"
 
-#: src\ui\preset_name_dialog.py:24
+#: src\ui\preset_name_dialog.py:21
 msgid "Enter name for new preset:"
 msgstr "Enter name for new preset:"
 
-#: src\ui\preset_name_dialog.py:47
+#: src\ui\preset_name_dialog.py:43
 msgid "Allow non-ASCII characters"
 msgstr ""
 
-#: src\ui\preset_name_dialog.py:66
+#: src\ui\preset_name_dialog.py:69
 msgid ""
 "The game does not natively support non-ASCII input. No bans have been "
 "reported so far, but proceed with caution and use at your own risk."
 msgstr ""
+
+#~ msgid "📤 Export to Excel"
+#~ msgstr "📤 Export to Excel"
+
+#~ msgid "📥 Import from Excel"
+#~ msgstr "📥 Import from Excel"
 
 #~ msgid "Preset name cannot be empty"
 #~ msgstr "Preset name cannot be empty"
