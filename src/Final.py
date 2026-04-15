@@ -311,13 +311,13 @@ def save_file():
     match packer.detect_repacker(UNPACK_DIR).mode:
         case "PC":
             default_ext = ".sl2"
-            filetypes = (("Save File", "*.sl2 *.co2"), ("All Files", "*.*"))
+            filetypes = (("Save File", ("*.sl2", "*.co2")), ("All Files", "*"))
         case "PS":
             default_ext = ".dat"
-            filetypes = (("Save File", "*memory.dat"), ("All Files", "*.*"))
+            filetypes = (("Save File", "*.dat"), ("All Files", "*"))
         case _:
             default_ext = ""
-            filetypes = (("All Files", "*.*"),)
+            filetypes = (("All Files", "*"),)
 
     output_file = filedialog.asksaveasfilename(
         defaultextension=default_ext,
@@ -4270,7 +4270,7 @@ class SaveEditorGUI:
         global userdata_path
 
         file_path = filedialog.askopenfilename(
-            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
         )
         if not file_path:
             return
@@ -5811,7 +5811,7 @@ class SaveEditorGUI:
             return
 
         import_save_file = filedialog.askopenfilename(
-            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
         )
         if not import_save_file:
             return

@@ -26,7 +26,7 @@ jobs:
             os: windows-latest
             spec: src/build_win64_onedir.spec
             artifact: Nightreign_Relic_Editor_WIN64_Onedir
-            artifact-path: dist/*
+            artifact-path: dist/*.zip
             uv-python: 3.14
 
           - name: Windows 32-bit
@@ -47,14 +47,14 @@ jobs:
             os: macos-latest
             spec: src/build_mac.spec
             artifact: Nightreign_Relic_Editor_MAC-Silicon
-            artifact-path: dist/*.app
+            artifact-path: dist/*.zip
             uv-python: 3.12
 
           - name: macOS Intel
             os: macos-15-intel
             spec: src/build_mac.spec
             artifact: Nightreign_Relic_Editor_MAC-Intel
-            artifact-path: dist/*.app
+            artifact-path: dist/*.zip
             uv-python: 3.12
 
     runs-on: ${{ matrix.os }}
@@ -82,6 +82,46 @@ jobs:
 
       - name: Build Executable
         run: uv run pyinstaller ${{ matrix.spec }}
+
+      - name: Rename single artifact
+        env:
+          ARTIFACT_NAME: ${{ matrix.artifact }}
+        run: |
+          uv run python -c "
+          import os
+          from pathlib import Path
+          d = Path('dist')
+          new_name = os.environ.get('ARTIFACT_NAME', 'Nightreign_Relic_Editor')
+          
+          if not d.exists():
+              print(f'::warning:: Directory {d} not found')
+              exit(0)
+
+          items = list(d.iterdir())
+          print(f'Found {len(items)} items in {d}')
+
+          if len(items) == 1 and (f := items[0]).is_file():
+              ext = ''.join(f.suffixes)
+              new_path = d / f'{new_name}{ext}'
+              print(f'Renaming: {f.name} -> {new_path.name}')
+              f.rename(new_path)
+              print('Rename successful.')
+          else:
+              print('Skip renaming: dist folder does not contain exactly one file.')
+              for item in items:
+                  print(f' - Found: {item.name} ({'file' if item.is_file() else 'dir'})')
+          "
+
+      - name: Compress Win64 Onedir Artifact
+        if: matrix.name == 'Windows 64-bit Onedir'
+        shell: pwsh
+        run: |
+          7z a -tzip "dist/${{ matrix.artifact }}.zip" "./dist/*" -x!"*.zip" -y
+
+      - name: Compress macOS Artifact
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          ditto -ck --sequesterRsrc --keepParent dist/*.app "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
@@ -138,19 +178,10 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ./artifacts
+          merge-multiple: true
 
       - name: Display files
         run: ls ./artifacts
-
-      - name: Zip folders
-        run: |
-          cd artifacts
-          for dir in */; do
-            dir="${dir%/}"
-            zipname="$dir.zip"
-            echo "Zipping $dir into $zipname"
-            (cd "$dir" && zip -r "../$zipname" .)
-          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -160,4 +191,4 @@ jobs:
           generate_release_notes: false
           draft: true
           prerelease: false
-          files: ./artifacts/*.zip
+          files: ./artifacts/*
