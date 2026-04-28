@@ -1190,7 +1190,7 @@ class SaveEditorGUI:
     def __init__(self, root: tk.Tk):
         self.color_theme = ColorTheme()
 
-        self.game_data = SourceDataHandler()
+        self.game_data = SourceDataHandler(language=self.config.language)
         self.relic_checker = RelicChecker()
         self.inventory_handler = InventoryHandler()
         self.loadout_handler = LoadoutHandler()
