@@ -3,8 +3,6 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING
 
-from language_manager import N_, lang_mgr
-
 from . import vars
 from .dialog import Dialog
 
@@ -16,13 +14,11 @@ if TYPE_CHECKING:
 
 class PresetNameDialog(Dialog[str]):
     def __init__(self, master: tk.Misc, initial: str = ""):
-        super().__init__(master)
-        lang_mgr.register(self, N_("New Preset Name"), "title")
+        super().__init__(master, _("New Preset Name"))
 
         label_frame = ttk.Frame(self.main_frame)
         label_frame.pack(fill="x")
-        label = ttk.Label(label_frame)
-        lang_mgr.register(label, N_("Enter name for new preset:"))
+        label = ttk.Label(label_frame, text=_("Enter name for new preset:"))
         label.pack(anchor="w")
 
         vcmd = (self.master.register(self.validate), "%P")
@@ -44,17 +40,23 @@ class PresetNameDialog(Dialog[str]):
             option_frame,
             variable=self.allow_non_ascii_var,
             command=self.non_ascii_warning,
+            text=_("Allow non-ASCII characters"),
         )
-        lang_mgr.register(allow_non_ascii_cb, N_("Allow non-ASCII characters"))
         allow_non_ascii_cb.pack(anchor="w")
 
         button_frame = ttk.Frame(self.main_frame)
         button_frame.pack(pady=10)
-        ok_button = ttk.Button(button_frame, command=self.on_ok)
-        lang_mgr.register(ok_button, N_("OK"))
+        ok_button = ttk.Button(
+            button_frame,
+            command=self.on_ok,
+            text=_("OK"),
+        )
         ok_button.pack(side=tk.LEFT, padx=10)
-        cancel_button = ttk.Button(button_frame, command=self.on_close)
-        lang_mgr.register(cancel_button, N_("Cancel"))
+        cancel_button = ttk.Button(
+            button_frame,
+            command=self.on_close,
+            text=_("Cancel"),
+        )
         cancel_button.pack(side=tk.LEFT, padx=10)
 
         self.bind("<Return>", lambda e: self.on_ok())

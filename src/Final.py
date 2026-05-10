@@ -279,25 +279,55 @@ RELIC_COLOR_HEX = {
 }
 
 
+def ask_and_resign_steam_id(output_file: str):
+    mode = packer.detect_repacker(UNPACK_DIR).mode
+    if mode != "PC":
+        return False
+    dir_name = Path(output_file).parent.name
+    if not dir_name.isdigit() or len(dir_name) != 17:
+        return False
+    target_steam_id = int(dir_name)
+    current_steam_id = int.from_bytes(packer.read_steam_id(UNPACK_DIR), "little")
+    if target_steam_id == current_steam_id:
+        return False
+    answer = messagebox.askyesnocancel(
+        title=_("Steam ID re-sign"),
+        message=_(
+            "You are saving to a path belonging to Steam ID {target_id},\n"
+            "which does not match the current Steam ID {current_id}.\n\n"
+            "Would you like to re-sign the save file to Steam ID {target_id}?"
+        ).format(target_id=target_steam_id, current_id=current_steam_id)
+    )
+    if answer == True:
+        target_steam_id_bytes = target_steam_id.to_bytes(8, byteorder="little")
+        for i in range(11):
+            packer.patch_steam_id(f"{UNPACK_DIR}/USERDATA_{i}", target_steam_id_bytes)
+    return answer
+
+
 def save_file():
     save_current_data()
 
     match packer.detect_repacker(UNPACK_DIR).mode:
         case "PC":
             default_ext = ".sl2"
-            filetypes = (("Save File", "*.sl2 *.co2"), ("All Files", "*.*"))
+            filetypes = (("Save File", ("*.sl2", "*.co2")), ("All Files", "*"))
         case "PS":
             default_ext = ".dat"
-            filetypes = (("Save File", "*memory.dat"), ("All Files", "*.*"))
+            filetypes = (("Save File", "*.dat"), ("All Files", "*"))
         case _:
             default_ext = ""
-            filetypes = (("All Files", "*.*"),)
+            filetypes = (("All Files", "*"),)
 
     output_file = filedialog.asksaveasfilename(
         defaultextension=default_ext,
         filetypes=filetypes,
     )
     if not output_file:
+        return False
+
+    answer = ask_and_resign_steam_id(output_file)
+    if answer is None:
         return False
 
     try:
@@ -312,10 +342,12 @@ def save_file():
 
 def name_to_path(unpack_dir: Path | str):
     unpack_dir = Path(unpack_dir)
+    character_slots = packer.get_character_slots(unpack_dir)
     name_list: list[tuple[str, str]] = []
-    prefix = "USERDATA_"
     for i in range(10):
-        userdata = unpack_dir / f"{prefix}{i}"
+        if not character_slots[i]:
+            continue
+        userdata = unpack_dir / f"USERDATA_{i}"
         if not userdata.exists():
             logger.warning(f"{userdata} not found, skipping")
             continue
@@ -1158,7 +1190,7 @@ class SaveEditorGUI:
     def __init__(self, root: tk.Tk):
         self.color_theme = ColorTheme()
 
-        self.game_data = SourceDataHandler()
+        self.game_data = SourceDataHandler(language=self.config.language)
         self.relic_checker = RelicChecker()
         self.inventory_handler = InventoryHandler()
         self.loadout_handler = LoadoutHandler()
@@ -1359,12 +1391,11 @@ class SaveEditorGUI:
             self.update_vessel_tab_comboboxes()
 
             # Display character buttons
-            self.display_character_buttons()
+            self.update_char_table()
 
             # Auto-select the last used character if valid
             if 0 <= last_char_index < len(self.char_table):
-                name, path = self.char_table[last_char_index]
-                self.on_character_click(last_char_index, path, name)
+                self.on_character_click(last_char_index)
 
         except Exception as e:
             traceback.print_exc()
@@ -1751,7 +1782,7 @@ class SaveEditorGUI:
             tree.tag_configure("deep_slot", foreground="#9999BB")
 
             # Bind right-click for context menu
-            tree.bind("<Button-3>", lambda e, v=i: self.show_vessel_context_menu(e, v))
+            tree.bind(ui.RIGHT_COMMAND, lambda e, v=i: self.show_vessel_context_menu(e, v))
             # Bind double-click to open replace dialog
             tree.bind(
                 "<Double-1>", lambda e, v=i: self.on_vessel_relic_double_click(e, v)
@@ -3894,24 +3925,30 @@ class SaveEditorGUI:
             legend_frame, text="", foreground="red", font=("Arial", 9, "bold")
         )
         self.illegal_count_label.pack(side="left", padx=(0, 15))
+        self.illegal_count_label.bind(
+            "<Button-1>", lambda e: self.set_status_filter("Illegal")
+        )
 
         lb_red = ttk.Label(
             legend_frame, text="Red = Illegal", style="illegal.TLabel"
         )
         lang_mgr.register(lb_red, N_("Red = Illegal"))
         lb_red.pack(side="left", padx=5)
+        lb_red.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         lb_purple = ttk.Label(
             legend_frame, text="Purple = Missing Curse", style="MissingCurse.TLabel"
         )
         lang_mgr.register(lb_purple, N_("Purple = Missing Curse"))
         lb_purple.pack(side="left", padx=5)
+        lb_purple.bind("<Button-1>", lambda e: self.set_status_filter("Curse Illegal"))
 
         lb_teal = ttk.Label(
             legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
         )
         lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
         lb_teal.pack(side="left", padx=5)
+        lb_teal.bind("<Button-1>", lambda e: self.set_status_filter("Strict Invalid"))
 
         lb_orange = ttk.Label(
             legend_frame,
@@ -3920,12 +3957,14 @@ class SaveEditorGUI:
         )
         lang_mgr.register(lb_orange, N_("Orange = Unique Relic (don't edit)"))
         lb_orange.pack(side="left", padx=5)
+        lb_orange.bind("<Button-1>", lambda e: self.set_status_filter("Forbidden"))
 
         lb_blue = ttk.Label(
             legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
         )
         lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
         lb_blue.pack(side="left", padx=5)
+        lb_blue.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         # Search frame - Row 1: Basic search and filters
         search_frame = ttk.Frame(self.inventory_tab)
@@ -4129,7 +4168,7 @@ class SaveEditorGUI:
         self.tree.configure(selectmode="extended")
 
         # Context menu
-        self.tree.bind("<Button-3>", self.show_context_menu)
+        self.tree.bind(ui.RIGHT_COMMAND, self.show_context_menu)
 
         # Action buttons
         action_frame = ttk.Frame(self.inventory_tab)
@@ -4231,7 +4270,7 @@ class SaveEditorGUI:
         global userdata_path
 
         file_path = filedialog.askopenfilename(
-            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
         )
         if not file_path:
             return
@@ -4243,14 +4282,17 @@ class SaveEditorGUI:
 
         # Save the opened file path to config
         self.config.last_file = file_path
-        # Reset character index since we're opening a new file
-        self.last_char_index = 0
-        self.config.save()
 
         # Display character buttons
-        self.display_character_buttons()
+        self.update_char_table()
 
-    def display_character_buttons(self):
+        # Select first character by default
+        if len(self.char_table) > 0:
+            self.on_character_click(0)
+        else:
+            messagebox.showerror("Error", "No characters were found in the save file.")
+
+    def update_char_table(self):
         # Clear existing buttons
         for widget in self.char_button_frame.winfo_children():
             widget.destroy()
@@ -4268,9 +4310,7 @@ class SaveEditorGUI:
                 self.char_button_frame,
                 text=f"{idx+1}. {name}",
                 style="Char.TButton",
-                command=lambda b_idx=idx, p=path, n=name: self.on_character_click(
-                    b_idx, p, n
-                ),
+                command=lambda b_idx=idx: self.on_character_click(b_idx),
                 width=20,
             )
             btn.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
@@ -4280,10 +4320,12 @@ class SaveEditorGUI:
         for col in range(columns):
             self.char_button_frame.grid_columnconfigure(col, weight=1)
 
-    def on_character_click(self, idx, path, name):
+    def on_character_click(self, idx):
         # Reset all buttons to normal style
         for b in self.char_buttons:
             b.configure(style="Char.TButton")
+
+        _, path = self.char_table[idx]
 
         # Highlight clicked button
         self.char_buttons[idx].configure(style="Highlighted.TButton")
@@ -4362,16 +4404,20 @@ class SaveEditorGUI:
             return
 
         confrim = messagebox.askyesno(
-            "Confirm",
-            "Modifying Murks would get you banned. Are you sure you want to proceed?",
+            _("Confirm"),
+            _(
+                "Modifying Murks would get you banned. Are you sure you want to proceed?"
+            ),
+            icon="warning",
         )
         if not confrim:
             return
 
-        new_value = simpledialog.askinteger(
-            "Modify Murks",
-            f"Current Murks: {self.inventory_handler.murks}\n\nEnter new value (decimal):",
-            initialvalue=self.inventory_handler.murks,
+        new_value = ui.ask_for_int(
+            self.root,
+            title=_("Modify Murks"),
+            prompt=_("Enter new value:"),
+            initial=self.inventory_handler.murks,
         )
         if new_value is not None:
             self.inventory_handler.murks = new_value
@@ -4384,10 +4430,19 @@ class SaveEditorGUI:
             messagebox.showwarning("Warning", "No character loaded")
             return
 
-        new_value = simpledialog.askinteger(
-            "Modify Sigs",
-            f"Current Sigs: {self.inventory_handler.sigs}\n\nEnter new value (decimal):",
-            initialvalue=self.inventory_handler.sigs,
+        confrim = messagebox.askyesno(
+            _("Confirm"),
+            _("Modifying Sigs would get you banned. Are you sure you want to proceed?"),
+            icon="warning",
+        )
+        if not confrim:
+            return
+
+        new_value = ui.ask_for_int(
+            self.root,
+            title=_("Modify Sigs"),
+            prompt=_("Enter new value:"),
+            initial=self.inventory_handler.sigs,
         )
         if new_value is not None:
             self.inventory_handler.sigs = new_value
@@ -4422,10 +4477,12 @@ class SaveEditorGUI:
         # Update illegal count label
         if self.inventory_handler.illegal_count > 0:
             self.illegal_count_label.config(
-                text=f"⚠️ {self.inventory_handler.illegal_count} Illegal Relic(s) Found"
+                text=_("⚠️ {count} Illegal Relic(s) Found").format(
+                    count=self.inventory_handler.illegal_count
+                )
             )
         else:
-            self.illegal_count_label.config(text="✓ All Relics Valid")
+            self.illegal_count_label.config(text=_("✓ All Relics Valid"))
 
         # Backup original order
         if hasattr(self, "all_relics"):
@@ -4587,6 +4644,14 @@ class SaveEditorGUI:
             self.sort_by_column("#")
 
         self.run_task_async(heavy_loading, (), "Loading...", callback=complete)
+
+    def set_status_filter(self, status: str):
+        if self.status_filter_var.get() == status:
+            self.status_filter_var.set("All")
+        else:
+            self.status_filter_var.set(status)
+        self.status_filter_combo.selection_range(0, tk.END)
+        self.filter_relics()
 
     def filter_relics(self):
         """Filter relics based on search term and all filter criteria"""
@@ -5071,11 +5136,16 @@ class SaveEditorGUI:
             msg_warning("Warning", "No relic selected")
             return
 
-        target_index_str = ui.ask_for_move_index(self.root)
-        if not target_index_str:
+        target_index = ui.ask_for_int(
+            self.root,
+            title=_("Move Index"),
+            prompt=_("Move to After (#):"),
+            initial=None,
+            note=_("Note: This will also affect the 'Acquisition Time' sorting in-game."),
+        )
+        if not target_index:
             return
 
-        target_index = int(target_index_str)
         target_index = min(max(0, target_index), len(self.all_relics))
 
         tags = [self.tree.item(item, "tags") for item in selection]
@@ -5741,7 +5811,7 @@ class SaveEditorGUI:
             return
 
         import_save_file = filedialog.askopenfilename(
-            filetypes=(("Save File", "*.sl2 *.co2 *memory.dat"), ("All Files", "*.*"))
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
         )
         if not import_save_file:
             return
@@ -5757,8 +5827,8 @@ class SaveEditorGUI:
             new_name = InventoryHandler.get_player_name_from_data(globals.data)
             msg_info("Success", f"Successfully replace {old_name} <- {new_name}")
             popup.destroy()
-            self.display_character_buttons()
-            self.on_character_click(index, path, new_name)
+            self.update_char_table()
+            self.on_character_click(index)
 
         popup = tk.Toplevel(self.root)
         self.color_theme.apply(popup)
@@ -5945,9 +6015,12 @@ class ModifyRelicDialog:
         self._update_color_display()
         self._update_relic_structure_display()
         self._update_relic_type_display()
-        item_id = int(self.item_id_entry.get())
-        item_name = self.game_data.relics[item_id].name
-        self.title_var.set(item_name)
+        try:
+            item_id = int(self.item_id_entry.get())
+            item_name = self.game_data.relics[item_id].name
+            self.title_var.set(item_name)
+        except:
+            self.title_var.set("Unknown")
 
     def _update_relic_type_display(self):
         """Update the relic type indicator (Original vs Scene/1.02)"""
@@ -7391,13 +7464,13 @@ class ModifyRelicDialog:
         self.effect_entries[effect_index].insert(0, str(effect_id))
         self.on_effect_change(effect_index)
 
-    def fix_invalid_entry(self):
+    def auto_fix_entries(self):
         for entry in self.effect_entries:
             try:
                 value = int(entry.get())
             except ValueError:
                 value = 0xFFFFFFFF
-            if value not in self.game_data.effects:
+            if value == 0 or value not in self.game_data.effects:
                 value = 0xFFFFFFFF
             entry.delete(0, tk.END)
             entry.insert(0, str(value))
@@ -7406,7 +7479,7 @@ class ModifyRelicDialog:
         assert self.relic_checker is not None, "Relic checker not initialized"
 
         if self.auto_fix_var.get():
-            self.fix_invalid_entry()
+            self.auto_fix_entries()
             self.auto_sort_effects()
 
         # Extract effect IDs from entries

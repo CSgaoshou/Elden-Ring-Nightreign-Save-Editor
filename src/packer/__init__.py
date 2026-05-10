@@ -2,6 +2,7 @@ from pathlib import Path
 
 from . import _pc, _ps
 from ._registry import PackerRegistry
+from ._utils import get_character_slots
 
 
 def detect_unpacker(save_file: Path | str):
