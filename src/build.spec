@@ -9,7 +9,7 @@ a = Analysis(
     datas=[
         (os.path.join(os.getcwd(), 'src', 'Resources'), 'Resources'),
     ],
-    hiddenimports=[],
+    hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -26,7 +26,7 @@ exe_windows = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Elden_Ring_Save_Editor',
+    name='Nightreign_Relic_Editor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -40,6 +40,10 @@ class LanguageManager:
         :param kwargs: Optional formatting variables for the string.
         """
         with self._list_lock:
+            self.clean_up()
+            if any(entry["widget"] is widget for entry in self._widgets):
+                return
+
             entry = {
                 "widget": widget,
                 "key": text_key,
@@ -51,28 +55,26 @@ class LanguageManager:
         # Initial translation update
         self._update_widget(entry)
 
+    def clean_up(self):
+        self._widgets = [
+            item for item in self._widgets if item["widget"].winfo_exists()
+        ]
+
     def refresh_all(self):
         """
         Thread-safe refresh of all registered widgets.
         Can be safely called from background threads.
         """
+        def task():
+            with self._list_lock:
+                self.clean_up()
+                for item in self._widgets:
+                    self._update_widget(item)
+
         with self._list_lock:
-            # 1. Filter out destroyed widgets to prevent memory leaks
-            self._widgets = [item for item in self._widgets if item["widget"].winfo_exists()]
-
-            # 2. Batch update remaining widgets
-            for item in self._widgets:
-                self._safe_gui_update(item)
-
-    def _safe_gui_update(self, item):
-        """
-        Ensures UI updates happen on the Tkinter Main Thread.
-        Uses widget.after() to schedule the update if called from another thread.
-        """
-        widget = item["widget"]
-        if widget.winfo_exists():
-            # Schedule the update on the main thread's event loop
-            widget.after(0, lambda: self._update_widget(item))
+            if len(self._widgets) == 0:
+                return
+            self._widgets[0]["widget"].after(0, task)
 
     def _update_widget(self, item):
         try:
@@ -106,8 +108,8 @@ class LanguageManager:
         """
         Loads the .mo file and triggers a UI refresh for all registered widgets.
         """
-        logger.warning(f"Loading language: {lang_code}")
-        logger.warning(f"Localedir: {localedir}")
+        logger.info(f"Loading language: {lang_code}")
+        logger.info(f"Localedir: {localedir}")
         try:
             # Create translation object and install _() into builtins
             trans = gettext.translation(

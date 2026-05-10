@@ -25,7 +25,7 @@ exe_windows = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Elden_Ring_Save_Editor',
+    name='Nightreign_Relic_Editor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -46,5 +46,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Elden_Ring_Save_Editor_WIN64'
+    name='Nightreign_Relic_Editor_WIN64'
 )

@@ -26,7 +26,7 @@ exe_windows = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Elden_Ring_Save_Editor_WIN32',
+    name='Nightreign_Relic_Editor_WIN32',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -1,9 +1,14 @@
 name: BUILDBOT
+
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -12,53 +17,178 @@ jobs:
         include:
           - name: Windows 64-bit
             os: windows-latest
-            python-architecture: 'x64'
             spec: src/build.spec
-            artifact: Elden_Ring_Save_Editor_WIN64
-            artifact-path: dist/
+            artifact: Nightreign_Relic_Editor_WIN64
+            artifact-path: dist/*
+            uv-python: 3.14
+
+          - name: Windows 64-bit Onedir
+            os: windows-latest
+            spec: src/build_win64_onedir.spec
+            artifact: Nightreign_Relic_Editor_WIN64_Onedir
+            artifact-path: dist/*.zip
+            uv-python: 3.14
+
           - name: Windows 32-bit
             os: windows-latest
-            python-architecture: 'x86'
             spec: src/build_win32.spec
-            artifact: Elden_Ring_Save_Editor_WIN32
-            artifact-path: dist/Elden_Ring_Save_Editor_WIN32.exe
+            artifact: Nightreign_Relic_Editor_WIN32
+            artifact-path: dist/*
+            uv-python: cpython-3.14-windows-i686
+
           - name: Linux x86_64
             os: ubuntu-latest
-            python-architecture: 'x64'
             spec: src/build.spec
-            artifact: Elden_Ring_Save_Editor_LINUX_x86_64
-            artifact-path: dist/
+            artifact: Nightreign_Relic_Editor_LINUX_x86_64
+            artifact-path: dist/*
+            uv-python: 3.12
+
           - name: macOS Silicon
             os: macos-latest
-            python-architecture: 'arm64'
             spec: src/build_mac.spec
-            artifact: Elden_Ring_Save_Editor_MAC-Silicon
+            artifact: Nightreign_Relic_Editor_MAC-Silicon
+            artifact-path: dist/*.zip
+            uv-python: 3.12
+
           - name: macOS Intel
-            os: macos-13
-            python-architecture: 'x64'
+            os: macos-15-intel
             spec: src/build_mac.spec
-            artifact: Elden_Ring_Save_Editor_MAC-Intel
+            artifact: Nightreign_Relic_Editor_MAC-Intel
+            artifact-path: dist/*.zip
+            uv-python: 3.12
+
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.12'
-          architecture: ${{ matrix.python-architecture }}
+          enable-cache: true
+
+      - name: Setup MSVC for Win32
+        if: matrix.name == 'Windows 32-bit'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
       - name: Install Dependencies
-        run: pip install cryptography pyinstaller openpyxl orjson pandas lxml pillow
+        run: uv sync ${{ matrix.uv-python && format('--python {0}', matrix.uv-python) || '' }}
+
+      - name: Install tkinter for Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
       - name: Build Executable
-        run: pyinstaller ${{ matrix.spec }}
+        run: uv run pyinstaller ${{ matrix.spec }}
+
+      - name: Rename single artifact
         env:
-          PYTHONPATH: ${{ runner.workspace }}/src
-      - name: Package macOS App
+          ARTIFACT_NAME: ${{ matrix.artifact }}
+        run: |
+          uv run python -c "
+          import os
+          from pathlib import Path
+          d = Path('dist')
+          new_name = os.environ.get('ARTIFACT_NAME', 'Nightreign_Relic_Editor')
+          
+          if not d.exists():
+              print(f'::warning:: Directory {d} not found')
+              exit(0)
+
+          items = list(d.iterdir())
+          print(f'Found {len(items)} items in {d}')
+
+          if len(items) == 1 and (f := items[0]).is_file():
+              ext = ''.join(f.suffixes)
+              new_path = d / f'{new_name}{ext}'
+              print(f'Renaming: {f.name} -> {new_path.name}')
+              f.rename(new_path)
+              print('Rename successful.')
+          else:
+              print('Skip renaming: dist folder does not contain exactly one file.')
+              for item in items:
+                  print(f' - Found: {item.name} ({'file' if item.is_file() else 'dir'})')
+          "
+
+      - name: Compress Win64 Onedir Artifact
+        if: matrix.name == 'Windows 64-bit Onedir'
+        shell: pwsh
+        run: |
+          7z a -tzip "dist/${{ matrix.artifact }}.zip" "./dist/*" -x!"*.zip" -y
+
+      - name: Compress macOS Artifact
         if: startsWith(matrix.os, 'macos')
         run: |
-          cd dist && zip -r ${{ matrix.artifact }}.zip *.app && mv ${{ matrix.artifact }}.zip ../
+          ditto -ck --sequesterRsrc --keepParent dist/*.app "dist/${{ matrix.artifact }}.zip"
+
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact-path || format('{0}.zip', matrix.artifact) }}
+          path: ${{ matrix.artifact-path }}
+
+  check:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check_tag.outputs.exists }}
+      newtag: ${{ steps.get_version.outputs.newtag}}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Get Version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(python -c "import pathlib, re; content = pathlib.Path('pyproject.toml').read_text(); print(re.search(r'version\s*=\s*[\" \']([^\" \']+)[\" \']', content).group(1))")
+          echo "newtag=V$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.get_version.outputs.newtag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Git Tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.get_version.outputs.newtag }}
+          git push origin ${{ steps.get_version.outputs.newtag }}
+
+  release:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Display files
+        run: ls ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.newtag }}
+          name: ${{ needs.check.outputs.newtag }}
+          generate_release_notes: false
+          draft: true
+          prerelease: false
+          files: ./artifacts/*

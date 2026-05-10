@@ -16,43 +16,41 @@ TODO:
     Switchable message settings
 """
 
-from main_file import decrypt_ds2_sl2, encrypt_modified_files
-from main_file_import import decrypt_ds2_sl2_import
-import json, shutil, os, struct
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-from pathlib import Path
-
 # openpyxl is lazy-loaded in export/import functions to speed up startup
-from typing import Optional, Any, List, Dict, Union
+import inspect
+import logging
+import os
+import re
+import struct
 import sys
 import threading
-import re
-import logging
-import inspect
-import zipfile
-from datetime import datetime
+import tkinter as tk
+import traceback
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
+
 from PIL import Image, ImageTk
 
 # project modules
-from log_config import setup_logging
-from basic_class import Item
 import globals
-from globals import (
-    ITEM_TYPE_RELIC,
-    ITEM_TYPE_GOODS,
-    WORKING_DIR,
-    COLOR_MAP,
-    UNIQUENESS_IDS,
-    ICONS_DIR,
-)
-
-from relic_checker import RelicChecker, InvalidReason, is_curse_invalid
-from source_data_handler import SourceDataHandler, get_system_language
-from vessel_handler import LoadoutHandler, is_vessel_available
-from inventory_handler import InventoryHandler
+import packer
+import ui
+from basic_class import Item
 from config_manager import ConfigManager
-from language_manager import lang_mgr, N_
+from globals import (COLOR_MAP, ICONS_DIR, ITEM_TYPE_RELIC, UNIQUENESS_IDS,
+                     WORKING_DIR)
+from inventory_handler import InventoryHandler
+from language_manager import N_, lang_mgr
+from log_config import setup_logging
+from relic_checker import InvalidReason, RelicChecker, is_curse_invalid
+from source_data_handler import SourceDataHandler
+from utils.backup import create_backup
+from vessel_handler import LoadoutHandler, is_vessel_available
+
+# Forward declaration for IDE/Linter support
+if TYPE_CHECKING:
+    def _(message: str) -> str: ...
 
 
 def get_base_dir():
@@ -69,7 +67,6 @@ logger = logging.getLogger(__name__)
 
 # Global variables
 os.chdir(WORKING_DIR)
-
 userdata_path = None
 
 
@@ -78,52 +75,8 @@ CONFIG_FILE = os.path.join(get_base_dir(), "editor_config.json")
 # Save Backup DIr Path
 BACKUP_DIR = os.path.join(get_base_dir(), "backup")
 
-
-def backup_save(file_path):
-    global BACKUP_DIR
-    config = ConfigManager()
-
-    def manage_backup_rotation():
-        # Get all zip files except root.zip
-        files = [
-            f for f in os.listdir(BACKUP_DIR) if f.endswith(".zip") and f != "root.zip"
-        ]
-
-        # Sort files by modification time (oldest first)
-        files.sort(key=lambda x: os.path.getmtime(os.path.join(BACKUP_DIR, x)))
-
-        # If more than config.max_backups, remove the oldest ones
-        while len(files) > config.max_backups:
-            oldest_file = files.pop(0)
-            os.remove(os.path.join(BACKUP_DIR, oldest_file))
-            logger.info(f"Removed old backup: {oldest_file}")
-
-    # Ensure backup directory exists
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-        logger.info(f"Created backup directory: {BACKUP_DIR}")
-
-    root_zip_path = os.path.join(BACKUP_DIR, "root.zip")
-
-    # Check if root.zip exists
-    if not os.path.exists(root_zip_path):
-        # Case: root.zip doesn't exist, create it as the pure backup
-        logger.info("root.zip not found. Creating initial pure backup...")
-        with zipfile.ZipFile(root_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(file_path, os.path.basename(file_path))
-        logger.info(f"Successfully created: {root_zip_path}")
-    else:
-        # Case: root.zip exists, perform regular time-stamped backup
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"backup_{timestamp}.zip"
-        backup_full_path = os.path.join(BACKUP_DIR, backup_filename)
-
-        with zipfile.ZipFile(backup_full_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(file_path, os.path.basename(file_path))
-        logger.info(f"Created regular backup: {backup_filename}")
-
-        # Manage backup rotation (keep max 5 regular backups)
-        manage_backup_rotation()
+UNPACK_DIR = "decrypted_output"
+UNPACK_DIR_IMPORT = "decrypted_output_import"
 
 
 def msg_info(*args, **kargs):
@@ -170,19 +123,6 @@ def autosize_treeview_columns(tree, padding=20, min_width=50):
         # Set stretch=False to prevent columns from growing beyond content width
         final_width = max(min_width, max_content_width + padding)
         tree.column(col, width=final_width, minwidth=final_width, stretch=False)
-
-
-imported_data = None
-MODE = None
-IMPORT_MODE = None
-char_name_list = []
-char_name_list_import = []
-ga_relic = []
-ga_items = []
-# AOB_search='00 00 00 00 ?? 00 00 00 ?? ?? 00 00 00 00 00 00 ??'
-AOB_search = "00 00 00 00 0A 00 00 00 ?? ?? 00 00 00 00 00 00 06"
-from_aob_steam = 44
-steam_id = None
 
 
 # Vessel slot color meanings
@@ -268,43 +208,6 @@ def parse_items(data_type, start_offset, slot_count=5120):
     return items, offset
 
 
-# Global to store acquisition order mapping (GA handle -> acquisition ID from inventory entry)
-# ga_acquisition_order = {}
-# Replaced by InventoryHandler.ga_to_acquisition_id
-
-
-# gaprint has been replaced by InventoryHandler for a more Pythonic implementation.
-def gaprint(data_type):
-    global ga_relic, ga_items
-    ga_items = []
-    ga_relic = []
-    start_offset = 0x14
-    slot_count = 5120
-    items, end_offset = parse_items(data_type, start_offset, slot_count)
-
-    for item in items:
-        type_bits = item.gaitem_handle & 0xF0000000
-        parsed_item = (
-            item.gaitem_handle,
-            item.item_id,
-            item.effect_1,
-            item.effect_2,
-            item.effect_3,
-            item.sec_effect1,
-            item.sec_effect2,
-            item.sec_effect3,
-            item.offset,
-            item.size,
-        )
-        ga_items.append(parsed_item)
-
-        if type_bits == ITEM_TYPE_RELIC:
-            ga_relic.append(parsed_item)
-
-    # debug_ga_relic_check()
-    return end_offset
-
-
 def get_character_loadout(char_name):
     """Get the current relic loadout for a character.
 
@@ -376,415 +279,88 @@ RELIC_COLOR_HEX = {
 }
 
 
-def split_files(file_path, folder_name):
-    backup_save(file_path)
-    file_name = os.path.basename(file_path)
-    split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
-    # clean current dir
-    if os.path.exists(split_dir):
-        shutil.rmtree(split_dir)  # delete folder and everything inside
-    os.makedirs(split_dir, exist_ok=True)
-
-    if file_name.lower() == "memory.dat":
-        with open(file_path, "rb") as f:
-            header = f.read(0x80)
-            with open(os.path.join(split_dir, "header"), "wb") as out:
-                out.write(header)
-
-            chunk_size = 0x100000
-            for i in range(10):
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                with open(os.path.join(split_dir, f"userdata{i}"), "wb") as out:
-                    data = bytearray(data)
-                    data = (0x00100010).to_bytes(4, "little") + data
-                    out.write(data)
-
-            regulation = f.read()
-            if regulation:
-                with open(os.path.join(split_dir, "regulation"), "wb") as out:
-                    out.write(regulation)
-
-    elif file_path.lower().endswith(".sl2"):
-        # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
-        decrypt_ds2_sl2(file_path)
+def ask_and_resign_steam_id(output_file: str):
+    mode = packer.detect_repacker(UNPACK_DIR).mode
+    if mode != "PC":
+        return False
+    dir_name = Path(output_file).parent.name
+    if not dir_name.isdigit() or len(dir_name) != 17:
+        return False
+    target_steam_id = int(dir_name)
+    current_steam_id = int.from_bytes(packer.read_steam_id(UNPACK_DIR), "little")
+    if target_steam_id == current_steam_id:
+        return False
+    answer = messagebox.askyesnocancel(
+        title=_("Steam ID re-sign"),
+        message=_(
+            "You are saving to a path belonging to Steam ID {target_id},\n"
+            "which does not match the current Steam ID {current_id}.\n\n"
+            "Would you like to re-sign the save file to Steam ID {target_id}?"
+        ).format(target_id=target_steam_id, current_id=current_steam_id)
+    )
+    if answer == True:
+        target_steam_id_bytes = target_steam_id.to_bytes(8, byteorder="little")
+        for i in range(11):
+            packer.patch_steam_id(f"{UNPACK_DIR}/USERDATA_{i}", target_steam_id_bytes)
+    return answer
 
 
 def save_file():
     save_current_data()
 
-    if MODE == "PC":
-
-        output_sl2_file = filedialog.asksaveasfilename(
-            initialfile="NR0000.sl2", title="Save PC SL2 save as"
-        )
-        if not output_sl2_file:
-            return
-
-        encrypt_modified_files(output_sl2_file)
-
-    if MODE == "PS4":  ### HERE
-        print("data length", len(globals.data))
-
-        # Validate data length before proceeding
-        expected_length = 0x100004
-        if len(globals.data) != expected_length:
-            messagebox.showerror(
-                "Error",
-                f"Modified userdata size is invalid. "
-                f"Expected {hex(expected_length)}, got {hex(len(globals.data))}. Cannot save.",
-            )
-            return
-
-        try:
-            split_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "decrypted_output"
-            )
-
-            # Validate split directory exists
-            if not os.path.exists(split_dir):
-                messagebox.showerror("Error", f"Directory not found: {split_dir}")
-                return
-
-            output_file = filedialog.asksaveasfilename(
-                initialfile="memory.dat",
-                title="Save PS4 save as",
-                defaultextension=".dat",
-                filetypes=[("DAT files", "*.dat"), ("All files", "*.*")],
-            )
-
-            if not output_file:
-                return
-
-            # Track total bytes written for validation
-            total_bytes_written = 0
-
-            with open(output_file, "wb") as out:
-                # 1. HEADER
-                header_path = os.path.join(split_dir, "header")
-                if not os.path.exists(header_path):
-                    messagebox.showerror(
-                        "Error", f"Header file not found: {header_path}"
-                    )
-                    return
-
-                with open(header_path, "rb") as f:
-                    header_data = f.read()
-                    if len(header_data) != 0x80:
-                        messagebox.showerror(
-                            "Error",
-                            f"Invalid header size: {hex(len(header_data))}. "
-                            f"Expected {hex(0x80)} bytes.",
-                        )
-                        return
-                    out.write(header_data)
-                    total_bytes_written += len(header_data)
-
-                print(f"Written header: {hex(total_bytes_written)} bytes")
-
-                # 2. USERDATA 0–9
-                check_padding = (0x00100010).to_bytes(4, "little")
-                userdata_chunks_found = 0
-
-                for i in range(10):
-                    userdata_path = os.path.join(split_dir, f"userdata{i}")
-
-                    if not os.path.exists(userdata_path):
-                        # Check if this is expected (some saves may have fewer chunks)
-                        if i == 0:
-                            messagebox.showerror(
-                                "Error", f"Required file not found: {userdata_path}"
-                            )
-                            return
-                        else:
-                            print(
-                                f"Warning: userdata{i} not found, stopping at {i} chunks"
-                            )
-                            break
-
-                    # Read original
-                    with open(userdata_path, "rb") as f:
-                        block = f.read()
-
-                    # Validate block has data
-                    if len(block) < 4:
-                        messagebox.showerror(
-                            "Error", f"userdata{i} is too small ({len(block)} bytes)"
-                        )
-                        return
-
-                    # PS4 USERDATA should start with 4 bytes padding
-                    if block[:4] == check_padding:
-                        # Strip the padding
-                        block = block[4:]
-                    else:
-                        # Padding missing - this is suspicious but warn and continue
-                        print(
-                            f"Warning: userdata{i} does not start with expected padding {check_padding.hex()}"
-                        )
-                        print(f"         Got: {block[:4].hex()}")
-                        # Don't add padding, just use as-is
-
-                    # Validate chunk size (should be 0x100000 for full chunks)
-                    expected_chunk_size = 0x100000
-                    if (
-                        len(block) != expected_chunk_size and i < 9
-                    ):  # Last chunk might be smaller
-                        print(
-                            f"Warning: userdata{i} has unexpected size {hex(len(block))}, "
-                            f"expected {hex(expected_chunk_size)}"
-                        )
-
-                    # Write block to output
-                    out.write(block)
-                    total_bytes_written += len(block)
-                    userdata_chunks_found += 1
-
-                print(
-                    f"Written {userdata_chunks_found} userdata chunks: {hex(total_bytes_written)} bytes total"
-                )
-
-                # 3. REGULATION
-                regulation_path = os.path.join(split_dir, "regulation")
-                if os.path.exists(regulation_path):
-                    with open(regulation_path, "rb") as f:
-                        regulation_data = f.read()
-                        if regulation_data:
-                            out.write(regulation_data)
-                            total_bytes_written += len(regulation_data)
-                            print(f"Written regulation: {len(regulation_data)} bytes")
-                        else:
-                            print("Warning: regulation file is empty")
-                else:
-                    print("Warning: regulation file not found, skipping")
-
-            # 4. SIZE VALIDATION
-            final_size = os.path.getsize(output_file)
-            expected_final_size = 0x12A00A0
-
-            print(
-                f"Final file size: {hex(final_size)} (expected: {hex(expected_final_size)})"
-            )
-
-            if final_size != expected_final_size:
-                messagebox.showerror(
-                    "ERROR",
-                    f"Invalid output file size!\n"
-                    f"Expected: {hex(expected_final_size)} ({expected_final_size:,} bytes)\n"
-                    f"Got: {hex(final_size)} ({final_size:,} bytes)\n"
-                    f"Difference: {final_size - expected_final_size:+,} bytes\n\n"
-                    f"File may be corrupt. Check the source files in {split_dir}",
-                )
-                return
-
-            msg_info("Success", f"File saved successfully to:\n{output_file}")
-            print(f"Successfully saved to: {output_file}")
-
-        except PermissionError as e:
-            msg_error(
-                "Permission Error",
-                f"Cannot write to file. Check permissions.\n{str(e)}",
-            )
-        except IOError as e:
-            msg_error("I/O Error", f"Error reading/writing files.\n{str(e)}")
-        except Exception as e:
-            msg_error(
-                "Exception",
-                f"Unexpected error occurred:\n{str(e)}\n\n"
-                f"Check console for details.",
-            )
-            import traceback
-
-            traceback.print_exc()
-
-
-def name_to_path():
-    global char_name_list, MODE
-    char_name_list = []
-    unpacked_folder = WORKING_DIR / "decrypted_output"
-
-    prefix = "userdata" if MODE == "PS4" else "USERDATA_0"
-
-    for i in range(10):
-        file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
-        if not os.path.exists(file_path):
-            continue
-
-        try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-                # Check minimum file size before parsing
-                if len(file_data) < 0x1000:  # Minimum expected size
-                    print(
-                        f"Warning: {file_path} is too small ({len(file_data)} bytes), skipping"
-                    )
-                    continue
-                name = InventoryHandler.get_player_name_from_data(file_data)
-                if name:
-                    char_name_list.append((name, file_path))
-        except struct.error as e:
-            print(f"Error parsing save file {file_path}: Data structure error - {e}")
-            print(f"  This may indicate a corrupted save file or incompatible format")
-        except IndexError as e:
-            import traceback
-
-            traceback.print_exc()
-            print(f"Error parsing save file {file_path}: Index error - {e}")
-            print(f"  This may indicate a corrupted save file")
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-            print(f"Error reading {file_path}: {e}")
-
-
-def name_to_path_import():
-    global char_name_list_import, IMPORT_MODE
-    char_name_list_import = []
-    unpacked_folder = WORKING_DIR / "decrypted_output_import"
-
-    prefix = "userdata" if IMPORT_MODE == "PS4" else "USERDATA_0"
-
-    for i in range(10):
-        file_path = os.path.join(unpacked_folder, f"{prefix}{i}")
-        if not os.path.exists(file_path):
-            continue
-
-        try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-                name = InventoryHandler.get_player_name_from_data(file_data)
-                if name:
-                    char_name_list_import.append((name, file_path))
-        except Exception as e:
-            print(f"Error reading {file_path}: {e}")
-
-
-def split_files_import(file_path, folder_name):
-    global IMPORT_MODE
-    file_name = os.path.basename(file_path)
-    split_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
-    # clean current dir
-    if os.path.exists(split_dir):
-        shutil.rmtree(split_dir)  # delete folder and everything inside
-    os.makedirs(split_dir, exist_ok=True)
-
-    if file_name.lower() == "memory.dat":
-        IMPORT_MODE = "PS4"
-        with open(file_path, "rb") as f:
-            header = f.read(0x80)
-            with open(os.path.join(split_dir, "header"), "wb") as out:
-                out.write(header)
-
-            chunk_size = 0x100000
-            for i in range(10):
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                with open(os.path.join(split_dir, f"userdata{i}"), "wb") as out:
-                    data = bytearray(data)
-                    data = (0x00100010).to_bytes(4, "little") + data
-                    out.write(data)
-
-            regulation = f.read()
-            if regulation:
-                with open(os.path.join(split_dir, "regulation"), "wb") as out:
-                    out.write(regulation)
-
-    elif file_path.lower().endswith(".sl2"):
-        # Accept any .sl2 file (supports custom save names from ModEngine 3, etc.)
-        IMPORT_MODE = "PC"
-        decrypt_ds2_sl2_import(file_path)
-
-
-def import_save():
-    global imported_data
-    global char_name_list_import
-
-    if globals.data == None:
-        messagebox.showerror("Error", "Please select a character to replace first")
-        return
-
-    import_path = filedialog.askopenfilename()
-    if not import_path:
-        return
-
-    # Split and generate list
-    split_files_import(import_path, "decrypted_output_import")
-    name_to_path_import()  # generates char_name_list_import = [(name, path), ...]
-
-    # Show popup window with buttons
-    show_import_popup()
-
-
-def show_import_popup():
-    popup = tk.Toplevel()
-    popup.title("Select Character to Import")
-
-    label = tk.Label(popup, text="Choose a character:", font=("Arial", 12, "bold"))
-    label.pack(pady=10)
-
-    # Create buttons for each character
-    for name, path in char_name_list_import:
-        btn = tk.Button(
-            popup,
-            text=name,
-            width=30,
-            command=lambda p=path: load_imported_data_and_close(p, popup),
-        )
-        btn.pack(pady=3)
-
-
-def load_imported_data_and_close(path, popup):
-    load_imported_data(path)
-    popup.destroy()
-
-
-def load_imported_data(path):
-    global imported_data
-
-    # Check if steam_id was found - required for import
-    if steam_id is None:
-        messagebox.showerror(
-            "Error",
-            "Cannot import save: Steam ID not found in current save file.\n\n"
-            "The Steam ID pattern could not be detected in your save.\n"
-            "This may indicate a corrupted or incompatible save file.",
-        )
-        return
-
-    with open(path, "rb") as f:
-        imported_data = f.read()
-
-    offsets = aob_search(imported_data, AOB_search)
-    if not offsets:
-        messagebox.showerror(
-            "Error",
-            "Cannot import save: Steam ID pattern not found in the imported save file.\n\n"
-            "The imported save may be corrupted or incompatible.",
-        )
-        return
-
-    offset = offsets[0] + 44
-    imported_data = (
-        imported_data[:offset] + bytes.fromhex(steam_id) + imported_data[offset + 8 :]
+    match packer.detect_repacker(UNPACK_DIR).mode:
+        case "PC":
+            default_ext = ".sl2"
+            filetypes = (("Save File", ("*.sl2", "*.co2")), ("All Files", "*"))
+        case "PS":
+            default_ext = ".dat"
+            filetypes = (("Save File", "*.dat"), ("All Files", "*"))
+        case _:
+            default_ext = ""
+            filetypes = (("All Files", "*"),)
+
+    output_file = filedialog.asksaveasfilename(
+        defaultextension=default_ext,
+        filetypes=filetypes,
     )
+    if not output_file:
+        return False
 
-    if len(imported_data) <= len(globals.data):
-        globals.data = imported_data + globals.data[len(imported_data) :]
+    answer = ask_and_resign_steam_id(output_file)
+    if answer is None:
+        return False
 
-    else:
-        globals.data = imported_data[: len(globals.data)]
+    try:
+        with create_backup(output_file, BACKUP_DIR, ConfigManager().max_backups):
+            packer.repack(UNPACK_DIR, output_file)
+        ConfigManager().last_file = output_file
+    except Exception as e:
+        messagebox.showerror("Error", f"An error was occurred while saving file: {e}")
+        return False
+    return True
 
-    for name, file in char_name_list_import:
-        if path == file:
-            char_name = name
-    save_current_data()
-    msg_info(
-        "Success",
-        f"Character '{char_name}' imported successfully. Save the file and open it again to see changes.",
-    )
+
+def name_to_path(unpack_dir: Path | str):
+    unpack_dir = Path(unpack_dir)
+    character_slots = packer.get_character_slots(unpack_dir)
+    name_list: list[tuple[str, str]] = []
+    for i in range(10):
+        if not character_slots[i]:
+            continue
+        userdata = unpack_dir / f"USERDATA_{i}"
+        if not userdata.exists():
+            logger.warning(f"{userdata} not found, skipping")
+            continue
+        userdata_size = userdata.stat().st_size
+        if userdata_size < 0x1000:
+            logger.warning(f"{userdata} is too small ({userdata_size}), skipping")
+        try:
+            name = InventoryHandler.get_player_name_from_data(userdata.read_bytes())
+            if name:
+                name_list.append((name, userdata.absolute()))
+        except Exception as e:
+            logger.error(f"Error on reading {userdata}: {e}")
+    return name_list
 
 
 def export_relics_to_excel(filepath="relics.xlsx"):
@@ -951,7 +527,7 @@ def delete_all_illegal_relics():
     deleted_count = 0
     failed_deletions = []
 
-    for ga in inventory.illegal_gas:
+    for ga in inventory.illegal_gas.copy():
         try:
             inventory.remove_relic_from_inventory(ga)
             save_current_data()
@@ -972,92 +548,7 @@ def save_current_data():
     global userdata_path
     if globals.data and userdata_path:
         with open(userdata_path, "wb") as f:
-
             f.write(globals.data)
-
-
-def aob_to_pattern(aob: str):
-
-    parts = aob.split()
-    pattern = bytearray()
-    mask = bytearray()
-    for p in parts:
-        if p == "??":
-            pattern.append(0x00)  # placeholder
-            mask.append(0)  # 0 = wildcard (must NOT be 0x00)
-        else:
-            pattern.append(int(p, 16))
-            mask.append(1)  # 1 = must match exactly
-    return bytes(pattern), bytes(mask)
-
-
-def aob_search(data: bytes, aob: str):
-    pattern, mask = aob_to_pattern(aob)
-    L = len(pattern)
-    mv = memoryview(data)
-
-    start = 0x58524  # skip below this offset
-    end = len(data) - L + 1
-
-    for i in range(start, end):
-
-        # Check bytes
-        for j in range(L):
-
-            b = mv[i + j]
-
-            # Non-wildcard: must match exactly
-            if mask[j]:
-                if b != pattern[j]:
-                    break
-
-            # Wildcard:
-            # 2025-12-28: Allow 0x00 to resolve Steam ID detection issues.
-            # Narrowed down AOB_str (bytes 5 & 17 fixed) to prevent false positives.
-            else:
-                # if b == 0:  # Removed this restriction
-                #     break
-                continue
-
-        else:
-            # Inner loop did not break → MATCH FOUND
-            return [i]
-
-    return []
-
-
-def find_steam_id(section_data):
-    # # 假設你的 Steam ID 是 '76561198000000000' (17位數字)
-    # # 先將它轉為 8 byte 的 little-endian 二進制格式 (這是 Steam ID 常見的儲存方式)
-    # import struct
-    # target_steam_id_hex = struct.pack('<Q', int(76561198013358313)).hex().upper()
-    # # 或者直接用你已知的 16進位 字串搜尋
-
-    # # 搜尋 section_data 中你 ID 出現的所有位置
-    # target_bytes = struct.pack('<Q', int(76561198013358313))
-    # index = section_data.find(target_bytes)
-    # print(f"你的 Steam ID 出現在偏移量: {hex(index)}")
-    # if index != -1:
-    #     search_start = index - 44
-    #     actual_aob = section_data[search_start : search_start + 17].hex(' ').upper()
-    #     print(f"預期 AOB 位置的實際數據為: {actual_aob}")
-    #     print(f"原本定義的 AOB 模式為: 00 00 00 00 ?? 00 00 00 ?? ?? 00 00 00 00 00 00 ??")
-
-    offsets = aob_search(section_data, AOB_search)
-    if not offsets:
-        # AOB pattern not found - return None instead of crashing
-        print("Warning: Steam ID AOB pattern not found in save data")
-        print(f"  AOB pattern searched: {AOB_search}")
-        print(f"  Save data size: {len(section_data)} bytes")
-        print(f"  This may happen with PS4 saves or after a game update")
-        return None
-
-    offset = offsets[0] + 44
-    steam_id = section_data[offset : offset + 8]
-
-    hex_str = steam_id.hex().upper()
-
-    return hex_str
 
 
 class ColorTheme:
@@ -1098,6 +589,7 @@ class ColorTheme:
                     "main_bg": "#ECECEC",  # Main window background
                     "card_bg": "#F8F9FA",  # Tab or Frame background
                     "input_bg": "#FFFFFF",  # Entry or Text background
+                    "insert_bg": "#000000",  # Insertion cursor color
                     "text_main": "#000000",  # Default text color
                     "text_second": "#888888",  # Secondary text color
                     "btn_bg": "#DDDDDD",  # Contrast for buttons
@@ -1170,6 +662,7 @@ class ColorTheme:
                     "main_bg": "#0a0a20",  # Deep dark background
                     "card_bg": "#161b3d",  # Slightly lighter surface
                     "input_bg": "#1c224d",  # Contrast for inputs
+                    "insert_bg": "#ffffff",  # Insertion cursor color
                     "text_main": "#e0e0ff",  # Soft white text
                     "text_second": "#8b9bbd",  # Secondary text color
                     "btn_bg": "#373862",  # Contrast for buttons
@@ -1326,7 +819,16 @@ class ColorTheme:
             lightcolor="white",
         )
         self._style.configure(
-            "TEntry", fieldbackground=base["input_bg"], foreground=base["text_main"]
+            "TEntry",
+            fieldbackground=base["input_bg"],
+            foreground=base["text_main"],
+            insertcolor=base["insert_bg"],
+        )
+        self._style.configure(
+            "TSpinbox",
+            fieldbackground=base["input_bg"],
+            foreground=base["text_main"],
+            insertcolor=base["insert_bg"],
         )
         self._style.configure(
             "TRadiobutton", background=base["card_bg"], foreground=base["text_main"]
@@ -1425,6 +927,9 @@ class ColorTheme:
         )
         self._style.configure(
             "illegal.TLabel", foreground=status["illegal"], font=("Arial", 10, "bold")
+        )
+        self._style.configure(
+            "valid.TLabel", foreground=status["valid"], font=("Arial", 10, "bold")
         )
         self._style.configure(
             "MissingCurse.TLabel",
@@ -1682,10 +1187,10 @@ class SaveEditorGUI:
     relic_checker: Optional[RelicChecker] = None
     config = ConfigManager()
 
-    def __init__(self, root):
+    def __init__(self, root: tk.Tk):
         self.color_theme = ColorTheme()
 
-        self.game_data = SourceDataHandler()
+        self.game_data = SourceDataHandler(language=self.config.language)
         self.relic_checker = RelicChecker()
         self.inventory_handler = InventoryHandler()
         self.loadout_handler = LoadoutHandler()
@@ -1699,17 +1204,19 @@ class SaveEditorGUI:
         self.empty_img = ImageTk.PhotoImage(Image.new("RGBA", (16, 16), (0, 0, 0, 0)))
 
         self.root = root
-        self.root.title("Elden Ring NightReign Save Editor")
+        self.root.title("Elden Ring Nightreign Save Editor")
         self.root.geometry("1080x700")
+
+        # Create Context Menu
+        self.context_menu = tk.Menu(self.root, tearoff=0)
 
         # Modify dialog reference
         self.modify_dialog = None
 
-        # Clipboard for copy/paste relic effects
-        self.clipboard_effects = None  # Will store (effects, item_id, item_name)
-
         # Track last selected character index for config saving
         self.last_char_index = None
+        self.char_table: list[tuple[str, str]] = []
+        """[(char_name, data_path), ...]"""
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(root)
@@ -1749,6 +1256,7 @@ class SaveEditorGUI:
         label_text="Please wait...",
         callback=None,
         progress_bar=None,
+        delay_ms=500,
     ):
         """
         A universal async wrapper to run heavy tasks without freezing the GUI.
@@ -1759,10 +1267,15 @@ class SaveEditorGUI:
         :param label_text: Message displayed in the loading popup.
         :param callback: A function to run in the main thread after task_func finishes successfully.
         :param progress_bar: If True, shows a determinate progress bar; otherwise indeterminate.
+        :param delay_ms: Show the loading popup after delay. Useful to reduce flickering for quick tasks.
         :type progress_bar: bool
         """
         # 1. Create a top-level loading window
         loading_win = tk.Toplevel(self.root)
+
+        # Hide the window initial
+        loading_win.withdraw() 
+
         loading_win.config(bg=self.color_theme.base["card_bg"])
         loading_win.title(title)
         loading_win.geometry("350x150")
@@ -1778,12 +1291,12 @@ class SaveEditorGUI:
         x = (
             self.root.winfo_x()
             + (self.root.winfo_width() // 2)
-            - (loading_win.winfo_width() // 2)
+            - (loading_win.winfo_reqwidth() // 2) # use reqwidth since window is hiding
         )
         y = (
             self.root.winfo_y()
             + (self.root.winfo_height() // 2)
-            - (loading_win.winfo_height() // 2)
+            - (loading_win.winfo_reqheight() // 2)
         )
         loading_win.geometry(f"+{x}+{y}")
 
@@ -1804,6 +1317,15 @@ class SaveEditorGUI:
 
         # Lock main GUI
         loading_win.grab_set()
+
+        task_status = {"finished": False}
+
+        def show_loading_window():
+            if not task_status["finished"] and loading_win.winfo_exists():
+                loading_win.deiconify()
+
+        # Show the window after delay
+        delay_timer_id = self.root.after(delay_ms, show_loading_window)
 
         def _ui_update(value, new_text):
             # Check if window still exists before updating
@@ -1835,6 +1357,9 @@ class SaveEditorGUI:
                 self.root.after(0, lambda: finish_task(False, err_msg))
 
         def finish_task(success, err_msg=None):
+            task_status["finished"] = True
+            self.root.after_cancel(delay_timer_id) 
+
             if loading_win.winfo_exists():
                 loading_win.grab_release()
                 loading_win.destroy()
@@ -1851,39 +1376,28 @@ class SaveEditorGUI:
 
     def try_load_last_file(self):
         """Try to load the last opened save file and character"""
-        global MODE
 
         last_file = self.config.last_file
-        last_mode = self.config.last_mode
         last_char_index = self.config.last_char_index
 
         if not last_file or not os.path.exists(last_file):
             return
 
         try:
-            # Set mode
-            MODE = last_mode
-
-            # Split files
-            split_files(last_file, "decrypted_output")
+            # Unpack files
+            packer.unpack(last_file, UNPACK_DIR)
 
             self.update_inventory_comboboxes()
             self.update_vessel_tab_comboboxes()
 
-            # Get character names
-            name_to_path()
-
             # Display character buttons
-            self.display_character_buttons()
+            self.update_char_table()
 
             # Auto-select the last used character if valid
-            if char_name_list and 0 <= last_char_index < len(char_name_list):
-                name, path = char_name_list[last_char_index]
-                self.on_character_click(last_char_index, path, name)
+            if 0 <= last_char_index < len(self.char_table):
+                self.on_character_click(last_char_index)
 
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             logger.error(f"Could not auto-load last file: {e}")
 
@@ -1909,14 +1423,14 @@ class SaveEditorGUI:
 
         ft_info_label = ttk.Label(
             file_frame,
-            text="Load your Elden Ring NightReign save file to begin editing",
+            text="Load your Elden Ring Nightreign save file to begin editing",
             style="Seconary.TLabel",
         )
-        lang_mgr.register(ft_info_label, N_("Load your Elden Ring NightReign save file to begin editing"))
+        lang_mgr.register(ft_info_label, N_("Load your Elden Ring Nightreign save file to begin editing"))
         ft_info_label.pack(pady=(0, 10))
 
         ft_btn_open = ttk.Button(
-            file_frame, text="📁 Open Save File", command=self.open_file, width=20
+            file_frame, text="📁 Open Save File", command=self.open_file, width=30
         )
         lang_mgr.register(ft_btn_open, N_("📁 Open Save File"))
         ft_btn_open.pack(pady=5)
@@ -1924,17 +1438,17 @@ class SaveEditorGUI:
             file_frame,
             text="💾 Save Modified File",
             command=self.save_changes,
-            width=20,
+            width=30,
         )
         lang_mgr.register(ft_btn_save, N_("💾 Save Modified File"))
         ft_btn_save.pack(pady=5)
         ft_btn_import = ttk.Button(
             file_frame,
-            text="💾 Import save (PC/PS4)",
-            command=self.import_save_tk,
-            width=20,
+            text="📥 Replace Character",
+            command=self.on_replace_character_click,
+            width=30,
         )
-        lang_mgr.register(ft_btn_import, N_("💾 Import save (PC/PS4)"))
+        lang_mgr.register(ft_btn_import, N_("📥 Replace Character"))
         ft_btn_import.pack(pady=5)
 
         # Setting section
@@ -2171,65 +1685,18 @@ class SaveEditorGUI:
 
         # Create 11 vessel slot displays (1 column layout)
         # Vessel names will be updated dynamically based on selected character
-        def open_new_preset_name_dialog():
-            # Dialog to enter new preset name
-            def check_regex(P):
-                if re.fullmatch(r"[a-zA-Z0-9 ]{0,18}", P):
-                    return True
-                return False
-
-            vcmd = self.root.register(check_regex)
-            dialog = tk.Toplevel(self.root)
-            self.color_theme.apply(dialog)
-            dialog.title("New Preset Name")
-            lang_mgr.register(dialog, N_("New Preset Name"), attr="title")
-            dialog.transient(self.root)
-            dialog.grab_set()
-
-            label = ttk.Label(dialog, text="Enter name for new preset:", style="Main.TLabel")
-            lang_mgr.register(label, N_("Enter name for new preset:"))
-            label.pack(pady=10, padx=10)
-
-            name_entry = ttk.Entry(
-                dialog, validate="key", validatecommand=(vcmd, "%P"), width=30
-            )
-            name_entry.pack(pady=5, padx=10)
-            name_entry.focus_set()
-
-            result = {"name": None}  # Use a dict to pass value back
-
-            def on_ok():
-                result["name"] = name_entry.get().strip()
-                if result["name"] is None or result["name"].strip() == "":
-                    messagebox.showerror("Error", _("Preset name cannot be empty"))
-                    return
-                dialog.destroy()
-
-            def on_cancel():
-                dialog.destroy()
-
-            ok_button = ttk.Button(dialog, text="OK", command=on_ok)
-            lang_mgr.register(ok_button, N_("OK"))
-            ok_button.pack(side=tk.LEFT, padx=5, pady=10)
-
-            cancel_button = ttk.Button(dialog, text="Cancel", command=on_cancel)
-            lang_mgr.register(cancel_button, N_("Cancel"))
-            cancel_button.pack(side=tk.RIGHT, padx=5, pady=10)
-
-            self.root.wait_window(dialog)
-            return result["name"]
 
         def on_add_to_preset(vessel_slot):
             hero_type = self.vessel_char_combo.current() + 1
-            preset_name = open_new_preset_name_dialog()
+            preset_name = ui.ask_for_preset_name(self.root)
+            if not preset_name:
+                return
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
             relics = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "relics"
             ]
-            if preset_name is None:
-                return
             try:
                 self.loadout_handler.push_preset(
                     hero_type, vessel_id, relics, preset_name
@@ -2315,7 +1782,7 @@ class SaveEditorGUI:
             tree.tag_configure("deep_slot", foreground="#9999BB")
 
             # Bind right-click for context menu
-            tree.bind("<Button-3>", lambda e, v=i: self.show_vessel_context_menu(e, v))
+            tree.bind(ui.RIGHT_COMMAND, lambda e, v=i: self.show_vessel_context_menu(e, v))
             # Bind double-click to open replace dialog
             tree.bind(
                 "<Double-1>", lambda e, v=i: self.on_vessel_relic_double_click(e, v)
@@ -2795,6 +2262,14 @@ class SaveEditorGUI:
             )
             lang_mgr.register(edit_btn, N_("✏️ Edit Preset"))
             edit_btn.pack(side="right", padx=5)
+            delete_btn = ttk.Button(
+                btn_frame,
+                text="❌ Delete Preset",
+                command=lambda pd=preset_data: self.delete_preset(pd),
+                style="Danger.TButton",
+            )
+            lang_mgr.register(delete_btn, N_("❌ Delete Preset"))
+            delete_btn.pack(side="right", padx=5)
 
             # Toggle function for collapse/expand
             def make_toggle(cf, cv):
@@ -2900,6 +2375,19 @@ class SaveEditorGUI:
         left_panel.pack_propagate(False)
 
         # Header
+        def on_header_click(_):
+            new_name = ui.ask_for_preset_name(dialog, preset["name"])
+            # Restore grab (modal state) to this dialog
+            # as the sub-dialog `ask_preset_name` stole it.
+            if dialog.winfo_exists():
+                dialog.grab_set()
+
+            if not new_name:
+                return
+            self.loadout_handler.rename_preset(preset["index"], new_name)
+            header.config(text=f"{char_name} - {new_name}")
+            self.refresh_presets()
+
         header = tk.Label(
             left_panel,
             text=f"{char_name} - {preset_name}",
@@ -2908,6 +2396,7 @@ class SaveEditorGUI:
             bg=BG_DARK,
         )
         header.pack(anchor="w", pady=(0, 10))
+        header.bind("<Button-1>", on_header_click)
 
         vessel_info = get_vessel_info(char_name, vessel_slot)
         vessel_name = vessel_info.get("name", f"Vessel {vessel_slot}")
@@ -3151,11 +2640,6 @@ class SaveEditorGUI:
                 messagebox.showerror(
                     "Error", f"Failed to clear relic from preset:\n{e}"
                 )
-            # self.write_preset_relic(preset_offset, idx, 0)
-            # slot_relic_data[idx] = None
-            # update_slot_display()
-            # update_details_panel()
-            # self.refresh_presets()
 
         def edit_selected_relic():
             """Open the modify dialog for the relic in the selected slot"""
@@ -3168,20 +2652,17 @@ class SaveEditorGUI:
             ga = ga_handles[idx]
             real_id = relic_data.get("real_id", 0)
 
-            # Release grab so we can interact with the edit dialog
-            dialog.grab_release()
-
             def refresh_after_edit():
                 # Refresh main inventory (this updates ga_relic)
                 self.refresh_inventory_lightly()
                 # Rebuild relic info from updated ga_relic
-                for ga in self.inventory_handler.relic_gas:
-                    relic = self.inventory_handler.relics[ga]
+                for _ga in self.inventory_handler.relic_gas:
+                    relic = self.inventory_handler.relics[_ga]
                     real_id = relic.state.real_item_id
                     item_info = self.game_data.relics.get(real_id)
                     effects = relic.state.effects_and_curses[:3]
                     curses = relic.state.effects_and_curses[3:]
-                    ga_to_full_info[ga] = {
+                    ga_to_full_info[_ga] = {
                         "name": item_info.name if item_info else f"ID:{real_id}",
                         "color": item_info.color if item_info else "Unknown",
                         "real_id": real_id,
@@ -3194,26 +2675,17 @@ class SaveEditorGUI:
                     slot_relic_data[idx] = new_relic_data
                     update_slot_display()
                     update_details_panel()
-
-            def on_edit_dialog_close():
-                # Restore grab when edit dialog closes
-                if dialog.winfo_exists():
-                    dialog.grab_set()
+                self.refresh_presets()
 
             # Open or reuse modify dialog
             if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
                 self.modify_dialog = ModifyRelicDialog(
-                    self.root, ga, real_id, refresh_after_edit
+                    dialog, ga, real_id, refresh_after_edit
                 )
             else:
                 self.modify_dialog.load_relic(ga, real_id)
                 self.modify_dialog.callback = refresh_after_edit
 
-            # Set up close protocol and bring to front
-            self.modify_dialog.dialog.protocol(
-                "WM_DELETE_WINDOW",
-                lambda: [self.modify_dialog.dialog.destroy(), on_edit_dialog_close()],
-            )
             self.modify_dialog.dialog.lift()
             self.modify_dialog.dialog.focus_force()
 
@@ -3552,6 +3024,20 @@ class SaveEditorGUI:
         update_details_panel()
         populate_relic_list()
 
+    def delete_preset(self, preset_info):
+        """Delete a preset after confirmation"""
+        preset = preset_info["preset"]
+        if not messagebox.askyesno(
+            "Delete Preset",
+            f"Are you sure to delete preset '{preset['name']}'?",
+        ):
+            return
+        try:
+            self.loadout_handler.remove_preset(preset["index"])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete preset:\n{e}")
+        self.refresh_vessels()
+
     def write_preset_relic(self, preset_offset, slot_idx, new_ga_handle):
         """Write a relic GA handle to a preset slot in the save file"""
         if globals.data is None:
@@ -3567,130 +3053,6 @@ class SaveEditorGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to write preset relic: {e}")
             return False
-
-    # def show_preset_relic_replacement_dialog(self, parent_dialog, relic_tree, slot_items,
-    #                                          ga_handles, slot_idx, is_deep, current_color,
-    #                                          preset_offset, char_name, vessel_slot, preset_name,
-    #                                          slot_relic_data=None, update_details_func=None,
-    #                                          ga_to_full_info=None):
-    #     """Show dialog to select a replacement relic for a preset slot"""
-    #     dialog = tk.Toplevel(parent_dialog)
-    #     dialog.title(f"Select Relic for Slot {slot_idx + 1}")
-    #     dialog.geometry("950x600")
-    #     dialog.transient(parent_dialog)
-    #     dialog.grab_set()
-
-    #     # Options frame
-    #     options_frame = ttk.Frame(dialog)
-    #     options_frame.pack(fill='x', padx=10, pady=5)
-
-    #     # Color filter option
-    #     any_color_var = tk.BooleanVar(value=False)
-
-    #     def refresh_list():
-    #         self.refresh_preset_relic_list(
-    #             replacement_tree, details_text, current_color,
-    #             any_color_var.get(), is_deep, search_var.get()
-    #         )
-
-    #     ttk.Checkbutton(options_frame, text="Show all colors", variable=any_color_var,
-    #                     command=refresh_list).pack(side='left', padx=5)
-
-    #     # Search
-    #     ttk.Label(options_frame, text="Search:").pack(side='left', padx=5)
-    #     search_var = tk.StringVar()
-    #     search_entry = ttk.Entry(options_frame, textvariable=search_var, width=30)
-    #     search_entry.pack(side='left', padx=5)
-    #     search_var.trace('w', lambda *args: refresh_list())
-
-    #     # Main content - split into list and details
-    #     content_frame = ttk.Frame(dialog)
-    #     content_frame.pack(fill='both', expand=True, padx=10, pady=5)
-
-    #     # Left side - Relic list
-    #     list_frame = ttk.LabelFrame(content_frame, text="Available Relics")
-    #     list_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
-
-    #     columns = ('Name', 'Color')
-    #     replacement_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=18)
-    #     replacement_tree.heading('Name', text='Relic Name')
-    #     replacement_tree.heading('Color', text='Color')
-
-    #     replacement_tree.column('Name', width=280)
-    #     replacement_tree.column('Color', width=80)
-
-    #     scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=replacement_tree.yview)
-    #     replacement_tree.configure(yscrollcommand=scrollbar.set)
-
-    #     replacement_tree.pack(side='left', fill='both', expand=True)
-    #     scrollbar.pack(side='right', fill='y')
-
-    #     # Right side - Details panel
-    #     details_outer = ttk.LabelFrame(content_frame, text="Relic Details")
-    #     details_outer.pack(side='right', fill='both', expand=True, padx=(5, 0))
-
-    #     details_text = tk.Text(details_outer, wrap='word', width=45, height=20, font=('Consolas', 9))
-    #     details_text.pack(fill='both', expand=True, padx=5, pady=5)
-    #     details_text.config(state='disabled')
-
-    #     # Configure text tags
-    #     details_text.tag_configure('title', font=('Segoe UI', 11, 'bold'))
-    #     details_text.tag_configure('section', font=('Segoe UI', 10, 'bold'), foreground='#4a90d9')
-    #     details_text.tag_configure('curse', foreground='#cc4444')
-
-    #     # Populate initial list
-    #     self.refresh_preset_relic_list(replacement_tree, details_text, current_color, False, is_deep, "")
-
-    #     # Button frame
-    #     btn_frame = ttk.Frame(dialog)
-    #     btn_frame.pack(fill='x', padx=10, pady=10)
-
-    #     def on_select():
-    #         selection = replacement_tree.selection()
-    #         if not selection:
-    #             messagebox.showwarning("No Selection", "Please select a relic.")
-    #             return
-
-    #         # Get relic data from our stored map
-    #         item_data = replacement_tree.item(selection[0])
-    #         new_ga = item_data.get('tags', [None])[0]
-    #         if new_ga is None:
-    #             return
-    #         new_ga = int(new_ga)
-
-    #         values = item_data['values']
-    #         new_name = values[0]
-    #         new_color = values[1]
-
-    #         # Update in memory
-    #         ga_handles[slot_idx] = new_ga
-
-    #         # Write to file
-    #         if self.write_preset_relic(preset_offset, slot_idx, new_ga):
-    #             # Update the parent tree display
-    #             slot_label = f"{'🔮 ' if is_deep else ''}Slot {slot_idx + 1}"
-    #             for item_id, idx in slot_items.items():
-    #                 if idx == slot_idx:
-    #                     relic_tree.item(item_id, values=(slot_label, new_name, new_color))
-    #                     break
-
-    #             # Update slot_relic_data if provided
-    #             if slot_relic_data is not None and ga_to_full_info is not None:
-    #                 slot_relic_data[slot_idx] = ga_to_full_info.get(new_ga)
-
-    #             # Update details in parent dialog
-    #             if update_details_func:
-    #                 update_details_func()
-
-    #             # Refresh the presets tree in the main window
-    #             self.refresh_presets()
-    #             dialog.destroy()
-
-    #     ttk.Button(btn_frame, text="Select", command=on_select).pack(side='left', padx=5)
-    #     ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='right', padx=5)
-
-    #     # Double-click to select
-    #     replacement_tree.bind("<Double-1>", lambda e: on_select())
 
     def refresh_preset_relic_list(
         self, tree, details_text, current_color, any_color, is_deep, search_text
@@ -3809,64 +3171,67 @@ class SaveEditorGUI:
     def show_vessel_context_menu(self, event, vessel_slot):
         """Show context menu for vessel relic slot"""
 
-        def clear_relic(slot_index):
+        def clear_relic(*slot_indexes: int):
             hero_type = self.vessel_char_combo.current() + 1
             vessel_id = self.loadout_handler.heroes[hero_type].vessels[vessel_slot][
                 "vessel_id"
             ]
-            self.loadout_handler.replace_vessel_relic(
-                hero_type, vessel_id, slot_index, 0
-            )
+            for slot_index in slot_indexes:
+                self.loadout_handler.replace_vessel_relic(
+                    hero_type, vessel_id, slot_index, 0
+                )
             self.refresh_inventory_and_vessels()
 
         # Get vessel data
-        tree = self.vessel_trees[vessel_slot]
+        tree: ttk.Treeview = self.vessel_trees[vessel_slot]
+        selection = tree.selection()
 
         # Identify which row was clicked
-        item = tree.identify_row(event.y)
-        if not item:
+        target = tree.identify_row(event.y)
+        if not target:
             return
 
-        # Select the clicked row
-        tree.selection_set(item)
+        if target not in selection:
+            # Single select the clicked row
+            tree.selection_set(target)
+            selection = (target,)
 
         # Get the slot index (1-based from display, convert to 0-based)
-        values = tree.item(item, "values")
-        if not values:
-            return
-
-        slot_index = int(values[0]) - 1  # Convert from 1-based to 0-based
-        relic_color = values[2]  # Color column
-        relic_name = values[3]  # Name column
-
-        # Check if slot has a relic (not empty)
-        has_relic = relic_name != "(Empty)" and relic_name != "-"
+        values = [tree.item(item, "values") for item in selection]
+        # Convert from 1-based to 0-based
+        slot_indexes = [int(value[0]) - 1 for value in values]
+        relic_colors = [value[2] for value in values]
+        relic_names = [value[3] for value in values]
+        empty_slots = [name in ("(Empty)", "-") for name in relic_names]
 
         # Create context menu
-        menu = tk.Menu(tree, tearoff=0)
+        menu = self.context_menu
+        menu.delete(0, "end")  # Clear previous menu items
 
-        if has_relic:
+        if len(selection) == 1:
+            index = slot_indexes[0]
             menu.add_command(
-                label=f"Replace Relic ({relic_color})",
-                command=lambda: self.open_replace_relic_dialog(vessel_slot, slot_index),
+                label="Assign Relic" if empty_slots[0] else "Replace Relic",
+                command=lambda: self.open_replace_relic_dialog(vessel_slot, index),
             )
+            if not empty_slots[0]:
+                menu.add_command(
+                    label="Edit Relic",
+                    command=lambda: self.open_edit_relic_dialog(vessel_slot, index),
+                )
+        if not all(empty_slots):
             menu.add_command(
-                label="📋 Copy Relic Effects",
-                command=lambda: self.copy_vessel_relic_effects(vessel_slot, slot_index),
+                label="Clear Relic",
+                command=lambda: clear_relic(*slot_indexes),
             )
-            menu.add_command(
-                label="Edit Relic",
-                command=lambda: self.open_edit_relic_dialog(vessel_slot, slot_index),
-            )
-            menu.add_command(
-                label="Clear Relic", command=lambda: clear_relic(slot_index)
-            )
-        else:
-            # Empty slot - allow assigning a relic (we know slot color from vessel data)
-            menu.add_command(
-                label=f"Assign Relic ({relic_color})",
-                command=lambda: self.open_replace_relic_dialog(vessel_slot, slot_index),
-            )
+        menu.add_command(
+            label="📋 Copy Effects",
+            command=lambda: self.copy_vessel_relic_effects(vessel_slot, *slot_indexes),
+        )
+        menu.add_command(
+            label="📋 Paste Effects",
+            command=lambda: self.paste_vessel_relic_effects(vessel_slot, *slot_indexes),
+        )
 
         # Show the menu
         menu.tk_popup(event.x_root, event.y_root)
@@ -4078,8 +3443,8 @@ class SaveEditorGUI:
         )
         equipped_by_cb.pack(side="left", padx=5)
         equipped_by_cb.current(0)
-        equipped_by_var.trace(
-            "w",
+        equipped_by_var.trace_add(
+            "write",
             lambda *args: self.refresh_replacement_list(
                 relic_tree,
                 current_color,
@@ -4098,8 +3463,8 @@ class SaveEditorGUI:
         ttk.Label(options_frame_2, text="Search:").pack(side="left", padx=5)
         search_entry = ttk.Entry(options_frame_2, textvariable=search_var, width=30)
         search_entry.pack(side="left", padx=5, fill="x", expand=True)
-        search_var.trace(
-            "w",
+        search_var.trace_add(
+            "write",
             lambda *args: self.refresh_replacement_list(
                 relic_tree,
                 current_color,
@@ -4356,7 +3721,7 @@ class SaveEditorGUI:
         except Exception:
             messagebox.showerror("Error", "Could not find relic data")
 
-    def copy_vessel_relic_effects(self, vessel_slot, slot_index):
+    def copy_vessel_relic_effects(self, vessel_slot, *slot_indexes):
         """Copy effects from a relic in a vessel slot to clipboard"""
         char_name = self.vessel_char_var.get()
         char_id = (
@@ -4369,30 +3734,38 @@ class SaveEditorGUI:
             messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
-        # Get the GA handle for this slot
+        # Get the GA handles for these slots
         vessel_id = self.loadout_handler.get_vessel_id(hero_type, vessel_slot)
-        ga_handle = self.loadout_handler.get_relic_ga_handle(
-            hero_type, vessel_id, slot_index
+        ga_handles = [
+            self.loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
+            for slot_index in slot_indexes
+        ]
+        # Exclude empty slots
+        ga_handles = [ga_handle for ga_handle in ga_handles if ga_handle != 0]
+        self.copy_relic_effects(ga_handles)
+
+    def paste_vessel_relic_effects(self, vessel_slot, *slot_indexes):
+        """Paste effects from a relic in a vessel slot to clipboard"""
+        char_name = self.vessel_char_var.get()
+        char_id = (
+            self.game_data.character_names.index(char_name)
+            if char_name in self.game_data.character_names
+            else -1
         )
-        if ga_handle == 0:
-            messagebox.showwarning("Warning", "Empty slot - no relic to copy")
+        hero_type = char_id + 1
+        if char_id < 0:
+            messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
-        try:
-            relic = self.inventory_handler.relics[ga_handle]
-            effects = relic.state.effects_and_curses[:3]
-            real_id = relic.state.real_item_id
-            _item = self.game_data.relics.get(real_id)
-            item_name = _item.name if _item else f"Unknown ({real_id})"
-            self.clipboard_effects = (effects, real_id, item_name)
-
-            effect_count = len([e for e in effects if e != 0])
-            messagebox.showinfo(
-                "Copied",
-                f"Copied effects from:\n{item_name}\n\nEffects: {effect_count} effect(s)",
-            )
-        except Exception:
-            messagebox.showerror("Error", "Could not find relic data")
+        # Get the GA handles for these slots
+        vessel_id = self.loadout_handler.get_vessel_id(hero_type, vessel_slot)
+        ga_handles = [
+            self.loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
+            for slot_index in slot_indexes
+        ]
+        # Exclude empty slots
+        ga_handles = [ga_handle for ga_handle in ga_handles if ga_handle != 0]
+        self.paste_relic_effects(ga_handles)
 
     def save_loadout(self):
         """Save the current character's loadout to a JSON file"""
@@ -4515,17 +3888,17 @@ class SaveEditorGUI:
         lang_mgr.register(btn_refresh, N_("🔄 Refresh Inventory"))
         btn_refresh.pack(side="left", padx=5)
 
-        btn_export = ttk.Button(
-            controls_frame, text="📤 Export to Excel", command=self.export_relics
-        )
-        lang_mgr.register(btn_export, N_("📤 Export to Excel"))
-        btn_export.pack(side="left", padx=5)
+        # btn_export = ttk.Button(
+        #     controls_frame, text="📤 Export to Excel", command=self.export_relics
+        # )
+        # lang_mgr.register(btn_export, N_("📤 Export to Excel"))
+        # btn_export.pack(side="left", padx=5)
 
-        btn_import = ttk.Button(
-            controls_frame, text="📥 Import from Excel", command=self.import_relics
-        )
-        lang_mgr.register(btn_import, N_("📥 Import from Excel"))
-        btn_import.pack(side="left", padx=5)
+        # btn_import = ttk.Button(
+        #     controls_frame, text="📥 Import from Excel", command=self.import_relics
+        # )
+        # lang_mgr.register(btn_import, N_("📥 Import from Excel"))
+        # btn_import.pack(side="left", padx=5)
 
         btn_delete_all = ttk.Button(
             controls_frame,
@@ -4535,15 +3908,6 @@ class SaveEditorGUI:
         )
         lang_mgr.register(btn_delete_all, N_("🗑️ Delete All Illegal"))
         btn_delete_all.pack(side="left", padx=5)
-
-        btn_delete_slct = ttk.Button(
-            controls_frame,
-            text="🗑️ Mass Delete Selected",
-            command=self.mass_delete_relics,
-            style="Danger.TButton",
-        )
-        lang_mgr.register(btn_delete_slct, N_("🗑️ Mass Delete Selected"))
-        btn_delete_slct.pack(side="left", padx=5)
 
         btn_mfix = ttk.Button(
             controls_frame, text="🔧 Mass Fix", command=self.mass_fix_incorrect_ids
@@ -4561,24 +3925,30 @@ class SaveEditorGUI:
             legend_frame, text="", foreground="red", font=("Arial", 9, "bold")
         )
         self.illegal_count_label.pack(side="left", padx=(0, 15))
-
-        lb_blue = ttk.Label(
-            legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
+        self.illegal_count_label.bind(
+            "<Button-1>", lambda e: self.set_status_filter("Illegal")
         )
-        lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
-        lb_blue.pack(side="left", padx=5)
 
         lb_red = ttk.Label(
             legend_frame, text="Red = Illegal", style="illegal.TLabel"
         )
         lang_mgr.register(lb_red, N_("Red = Illegal"))
         lb_red.pack(side="left", padx=5)
+        lb_red.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         lb_purple = ttk.Label(
             legend_frame, text="Purple = Missing Curse", style="MissingCurse.TLabel"
         )
         lang_mgr.register(lb_purple, N_("Purple = Missing Curse"))
         lb_purple.pack(side="left", padx=5)
+        lb_purple.bind("<Button-1>", lambda e: self.set_status_filter("Curse Illegal"))
+
+        lb_teal = ttk.Label(
+            legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
+        )
+        lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
+        lb_teal.pack(side="left", padx=5)
+        lb_teal.bind("<Button-1>", lambda e: self.set_status_filter("Strict Invalid"))
 
         lb_orange = ttk.Label(
             legend_frame,
@@ -4587,12 +3957,14 @@ class SaveEditorGUI:
         )
         lang_mgr.register(lb_orange, N_("Orange = Unique Relic (don't edit)"))
         lb_orange.pack(side="left", padx=5)
+        lb_orange.bind("<Button-1>", lambda e: self.set_status_filter("Forbidden"))
 
-        lb_teal = ttk.Label(
-            legend_frame, text="Teal = Strict Invalid", style="StrictInvalid.TLabel"
+        lb_blue = ttk.Label(
+            legend_frame, text="Blue = Illegal Unique", style="illegalUnique.TLabel"
         )
-        lang_mgr.register(lb_teal, N_("Teal = Strict Invalid"))
-        lb_teal.pack(side="left", padx=5)
+        lang_mgr.register(lb_blue, N_("Blue = Illegal Unique"))
+        lb_blue.pack(side="left", padx=5)
+        lb_blue.bind("<Button-1>", lambda e: self.set_status_filter("Illegal"))
 
         # Search frame - Row 1: Basic search and filters
         search_frame = ttk.Frame(self.inventory_tab)
@@ -4602,7 +3974,7 @@ class SaveEditorGUI:
         lang_mgr.register(lb_search, N_("🔍 Search:"))
         lb_search.pack(side="left", padx=5)
         self.search_var = tk.StringVar()
-        self.search_var.trace("w", lambda *args: self.filter_relics())
+        self.search_var.trace_add("write", lambda *args: self.filter_relics())
 
         self.search_entry = ttk.Entry(
             search_frame, textvariable=self.search_var, width=25
@@ -4796,7 +4168,7 @@ class SaveEditorGUI:
         self.tree.configure(selectmode="extended")
 
         # Context menu
-        self.tree.bind("<Button-3>", self.show_context_menu)
+        self.tree.bind(ui.RIGHT_COMMAND, self.show_context_menu)
 
         # Action buttons
         action_frame = ttk.Frame(self.inventory_tab)
@@ -4895,72 +4267,41 @@ class SaveEditorGUI:
             self.refresh_inventory_and_vessels()
 
     def open_file(self):
-        global MODE, userdata_path
+        global userdata_path
 
         file_path = filedialog.askopenfilename(
-            title="Select Save File",
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
         )
-
         if not file_path:
             return
 
-        file_name = os.path.basename(file_path)
-
-        # Determine mode based on file content, not just filename
-        # This allows custom save file names (e.g., from ModEngine 3 Manager)
-        if file_name.lower() == "memory.dat":
-            MODE = "PS4"
-        elif file_path.lower().endswith(".sl2"):
-            # Check if it's a valid SL2 file by looking for BND4 header
-            try:
-                with open(file_path, "rb") as f:
-                    header = f.read(4)
-                if header == b"BND4":
-                    MODE = "PC"
-                else:
-                    messagebox.showerror(
-                        "Error",
-                        "This .sl2 file does not have a valid BND4 header. It may be corrupted or not a valid Nightreign save file.",
-                    )
-                    return
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not read file: {e}")
-                return
-        else:
-            messagebox.showerror(
-                "Error",
-                "Please select a valid save file:\n\n• PC: .sl2 file (e.g., NR0000.sl2 or custom named .sl2)\n• PS4: decrypted memory.dat file",
-            )
-            return
-
-        # Split files
-        split_files(file_path, "decrypted_output")
+        packer.unpack(file_path, UNPACK_DIR)
 
         self.update_inventory_comboboxes()
         self.update_vessel_tab_comboboxes()
 
-        # Get character names
-        name_to_path()
-
         # Save the opened file path to config
         self.config.last_file = file_path
-        self.config.last_mode = MODE
-        # Reset character index since we're opening a new file
-        self.last_char_index = 0
-        self.config.save()
 
         # Display character buttons
-        self.display_character_buttons()
+        self.update_char_table()
 
-    def display_character_buttons(self):
+        # Select first character by default
+        if len(self.char_table) > 0:
+            self.on_character_click(0)
+        else:
+            messagebox.showerror("Error", "No characters were found in the save file.")
+
+    def update_char_table(self):
         # Clear existing buttons
         for widget in self.char_button_frame.winfo_children():
             widget.destroy()
 
         self.char_buttons = []
+        self.char_table = name_to_path(UNPACK_DIR)
 
         columns = 4  # Number of buttons per row
-        for idx, (name, path) in enumerate(char_name_list):
+        for idx, (name, path) in enumerate(self.char_table):
             row = idx // columns
             col = idx % columns
 
@@ -4969,9 +4310,7 @@ class SaveEditorGUI:
                 self.char_button_frame,
                 text=f"{idx+1}. {name}",
                 style="Char.TButton",
-                command=lambda b_idx=idx, p=path, n=name: self.on_character_click(
-                    b_idx, p, n
-                ),
+                command=lambda b_idx=idx: self.on_character_click(b_idx),
                 width=20,
             )
             btn.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
@@ -4981,10 +4320,12 @@ class SaveEditorGUI:
         for col in range(columns):
             self.char_button_frame.grid_columnconfigure(col, weight=1)
 
-    def on_character_click(self, idx, path, name):
+    def on_character_click(self, idx):
         # Reset all buttons to normal style
         for b in self.char_buttons:
             b.configure(style="Char.TButton")
+
+        _, path = self.char_table[idx]
 
         # Highlight clicked button
         self.char_buttons[idx].configure(style="Highlighted.TButton")
@@ -4998,7 +4339,7 @@ class SaveEditorGUI:
         self.load_character(path)
 
     def load_character(self, path):
-        global userdata_path, steam_id
+        global userdata_path
         userdata_path = path
 
         try:
@@ -5019,8 +4360,6 @@ class SaveEditorGUI:
             relic_checker = RelicChecker()
             # NOTE: Don't call set_illegal_relics() here - reload_inventory() will call it
 
-            steam_id = find_steam_id(globals.data)
-
             # Refresh all tabs (reload_inventory calls set_illegal_relics)
             self.reload_inventory()
             self.refresh_stats()
@@ -5038,8 +4377,6 @@ class SaveEditorGUI:
                 f"Try deleting some relics in-game and saving again.",
             )
         except IndexError as e:
-            import traceback
-
             traceback.print_exc()
             messagebox.showerror(
                 "Error",
@@ -5049,8 +4386,6 @@ class SaveEditorGUI:
                 f"Check the console for detailed error location.",
             )
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to load character: {str(e)}")
 
@@ -5069,16 +4404,20 @@ class SaveEditorGUI:
             return
 
         confrim = messagebox.askyesno(
-            "Confirm",
-            "Modifying Murks would get you banned. Are you sure you want to proceed?",
+            _("Confirm"),
+            _(
+                "Modifying Murks would get you banned. Are you sure you want to proceed?"
+            ),
+            icon="warning",
         )
         if not confrim:
             return
 
-        new_value = simpledialog.askinteger(
-            "Modify Murks",
-            f"Current Murks: {self.inventory_handler.murks}\n\nEnter new value (decimal):",
-            initialvalue=self.inventory_handler.murks,
+        new_value = ui.ask_for_int(
+            self.root,
+            title=_("Modify Murks"),
+            prompt=_("Enter new value:"),
+            initial=self.inventory_handler.murks,
         )
         if new_value is not None:
             self.inventory_handler.murks = new_value
@@ -5091,10 +4430,19 @@ class SaveEditorGUI:
             messagebox.showwarning("Warning", "No character loaded")
             return
 
-        new_value = simpledialog.askinteger(
-            "Modify Sigs",
-            f"Current Sigs: {self.inventory_handler.sigs}\n\nEnter new value (decimal):",
-            initialvalue=self.inventory_handler.sigs,
+        confrim = messagebox.askyesno(
+            _("Confirm"),
+            _("Modifying Sigs would get you banned. Are you sure you want to proceed?"),
+            icon="warning",
+        )
+        if not confrim:
+            return
+
+        new_value = ui.ask_for_int(
+            self.root,
+            title=_("Modify Sigs"),
+            prompt=_("Enter new value:"),
+            initial=self.inventory_handler.sigs,
         )
         if new_value is not None:
             self.inventory_handler.sigs = new_value
@@ -5129,10 +4477,18 @@ class SaveEditorGUI:
         # Update illegal count label
         if self.inventory_handler.illegal_count > 0:
             self.illegal_count_label.config(
-                text=f"⚠️ {self.inventory_handler.illegal_count} Illegal Relic(s) Found"
+                text=_("⚠️ {count} Illegal Relic(s) Found").format(
+                    count=self.inventory_handler.illegal_count
+                )
             )
         else:
-            self.illegal_count_label.config(text="✓ All Relics Valid")
+            self.illegal_count_label.config(text=_("✓ All Relics Valid"))
+
+        # Backup original order
+        if hasattr(self, "all_relics"):
+            ga_to_order = {relic["ga"]: i for i, relic in enumerate(self.all_relics)}
+        else:
+            ga_to_order = {}
 
         # Store all relic data for filtering
         self.all_relics = []
@@ -5236,11 +4592,10 @@ class SaveEditorGUI:
         sorted_by_acq = sorted(
             self.all_relics, key=lambda r: r.get("acquisition_index", 999999)
         )
-        self.all_relics.sort(
-            key=lambda r: r.get("acquisition_index", 999999), reverse=True
-        )
         for rank, relic in enumerate(sorted_by_acq, start=1):
             relic["acquisition_rank"] = rank
+        # Apply backup order
+        self.all_relics.sort(key=lambda r: ga_to_order.get(r["ga"], 0))
 
         # Update Heading image
         head_img = (
@@ -5280,9 +4635,23 @@ class SaveEditorGUI:
             if self.inventory_handler:
                 self.inventory_handler.set_illegal_relics()
 
-        self.run_task_async(
-            heavy_loading, (), "Loading...", callback=self.refresh_inventory_ui
-        )
+        def complete():
+            self.refresh_inventory_ui()
+
+            # Default sort inventory relics by acquisition rank
+            self.sort_column = "#"
+            self.sort_reverse = False
+            self.sort_by_column("#")
+
+        self.run_task_async(heavy_loading, (), "Loading...", callback=complete)
+
+    def set_status_filter(self, status: str):
+        if self.status_filter_var.get() == status:
+            self.status_filter_var.set("All")
+        else:
+            self.status_filter_var.set(status)
+        self.status_filter_combo.selection_range(0, tk.END)
+        self.filter_relics()
 
     def filter_relics(self):
         """Filter relics based on search term and all filter criteria"""
@@ -5498,18 +4867,18 @@ class SaveEditorGUI:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_column = col
-            self.sort_reverse = False
+            self.sort_reverse = True
 
         # Define sort key based on column
         def get_sort_key(relic):
             if col == "FAV":
-                return 0 if relic.get("is_favorite", False) else 1
+                return 1 if relic.get("is_favorite", False) else 0
             elif col == "#":
                 return relic.get("acquisition_rank", 99999)
             elif col == "Item Name":
                 return relic["item_name"].lower()
             elif col == "Deep":
-                return 0 if relic.get("is_deep", False) else 1
+                return 1 if relic.get("is_deep", False) else 0
             elif col == "Item ID":
                 return relic["real_id"]
             elif col == "Color":
@@ -5564,139 +4933,245 @@ class SaveEditorGUI:
             self.tree.heading("#0", text="")
 
     def show_context_menu(self, event):
-        # Select item under cursor
-        item = self.tree.identify_row(event.y)
-        if item:
-            self.tree.selection_set(item)
+        selections = self.tree.selection()
+        target_item = self.tree.identify_row(event.y)
+        if not target_item:
+            return
 
-            menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
-            menu.add_separator()
+        # Clear current selection if it does not include target item
+        if target_item not in selections:
+            self.tree.selection_set(target_item)
+            selections = (target_item,)
+
+        menu = self.context_menu
+        menu.delete(0, "end")  # Clear previous menu items
+        menu.add_command(label="💛 Toggle Favorite", command=self.toggle_favorite)
+        menu.add_separator()
+        if len(selections) == 1:
             menu.add_command(label="Modify", command=self.modify_selected_relic)
-            menu.add_command(
-                label="Delete",
-                foreground="red",
-                font=("Arial", 9, "bold"),
-                command=self.delete_selected_relic,
-            )
-            menu.add_separator()
-            menu.add_command(label="📋 Copy Effects", command=self.copy_relic_effects)
-
-            # Only enable paste if we have something in clipboard
-            paste_label = "📋 Paste Effects"
-            if self.clipboard_effects:
-                paste_label += f" (from {self.clipboard_effects[2]})"
-            menu.add_command(
-                label=paste_label,
-                command=self.paste_relic_effects,
-                state="normal" if self.clipboard_effects else "disabled",
-            )
-            menu.post(event.x_root, event.y_root)
+        menu.add_command(
+            label="Delete",
+            foreground="red",
+            font=("Arial", 9, "bold"),
+            command=self.delete_selected_relic,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="📋 Copy Effects",
+            command=self.copy_selected_relic_effects,
+        )
+        menu.add_command(
+            label="📋 Paste Effects",
+            command=self.paste_selected_relic_effects,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Move Index",
+            command=self.reindex_selected_relic,
+        )
+        menu.tk_popup(event.x_root, event.y_root)
 
     def toggle_favorite(self):
         """Toggle favorite status of selected relic"""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
-            return
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        self.inventory_handler.toggle_favorite_mark(ga_handle)
-        self.refresh_inventory_and_vessels()
 
-    def copy_relic_effects(self):
+        def task():
+            selections = self.tree.selection()
+            for item in selections:
+                tags = self.tree.item(item, "tags")
+                ga_handle = int(tags[0])
+                self.inventory_handler.toggle_favorite_mark(ga_handle)
+
+        self.run_task_async(task, callback=self.refresh_inventory_and_vessels)
+
+    def copy_relic_effects(self, ga_handles: list[int]):
+        relics = [self.inventory_handler.relics[ga] for ga in ga_handles]
+        unique_relics = [relic for relic in relics if relic.state.is_unique]
+        unique_names = [relic.state.name for relic in unique_relics]
+        unique_list_msg = "  - " + "\n  - ".join(unique_names)
+        if len(unique_relics) > 0:
+            if not messagebox.askyesno(
+                "Warning",
+                "Your selection includes following unique relics:\n\n"
+                f"{unique_list_msg}\n\n"
+                "which may contain invalid effects.\n\n"
+                "Do you still want to copy them?",
+                icon="warning",
+            ):
+                return
+
+        # We allow pasting effects between normal and deep relics.
+        # However, doing so often creates invalid that cannot be auto-fixed.
+        # Therefore, we sort them by type (normal/deep) here
+        # to minimize the chance of such unresolvable cases.
+        relics.sort(key=lambda x: x.state.is_deep)
+
+        try:
+            effects_string = self.inventory_handler.stringify_relic_effects(
+                [relic.ga_handle for relic in relics]
+            )
+            self.root.clipboard_clear()
+            self.root.clipboard_append(effects_string)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to copy effects: {e}")
+
+    def paste_relic_effects(self, ga_handles: list[int]):
+        relics = [self.inventory_handler.relics[ga] for ga in ga_handles]
+        unique_relics = [relic for relic in relics if relic.state.is_unique]
+        unique_names = [relic.state.name for relic in unique_relics]
+        unique_list_msg = "  - " + "\n  - ".join(unique_names)
+        if len(unique_relics) > 0:
+            if not messagebox.askyesno(
+                "Warning",
+                "Your selection includes following unique relics:\n\n"
+                f"{unique_list_msg}\n\n"
+                "Editing unique items is NOT recommended and may result in a ban.\n\n"
+                "Do you still want to paste the effects?",
+                icon="warning",
+            ):
+                return
+
+        # Sort by type (normal/deep) to mirror the copy phase.
+        relics.sort(key=lambda x: x.state.is_deep)
+
+        try:
+            clipboard = self.root.clipboard_get()
+            effects_lines = self.inventory_handler.parse_effects(clipboard)
+        except tk.TclError as e:
+            messagebox.showerror("Error", f"Failed to read clipboard: {e}")
+            return
+        except ValueError as e:
+            messagebox.showerror("Error", f"Failed to parse clipboard: {e}")
+            return
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to paste effects: {e}")
+            return
+
+        # Ensure the number of copied items matches the selection
+        if len(effects_lines) == 1:
+            # If the effects of a single relic are copied, apply to all selected items
+            effects_lines = [effects_lines[0]] * len(relics)
+        elif len(effects_lines) != len(relics):
+            messagebox.showerror(
+                "Error",
+                f"Failed to paste effects.\n\n"
+                f"Count mismatch: You copied {len(effects_lines)} effect(s), "
+                f"but selected {len(relics)} item(s) to paste into.",
+            )
+            return
+        count = len(relics)
+
+        if not messagebox.askyesno(
+            "Confirm Paste",
+            f"Are you sure to paste effects into {count} relics?",
+        ):
+            return
+
+        success_count = 0
+        error_count = 0
+        last_reason = ""
+
+        def task():
+            nonlocal success_count, error_count, last_reason
+
+            for i in range(count):
+                ga_handle = relics[i].ga_handle
+                effects = effects_lines[i]
+                try:
+                    self.inventory_handler.modify_relic(ga_handle, None, *effects)
+                    success_count += 1
+                except Exception as e:
+                    error_count += 1
+                    last_reason = str(e)
+            self.mass_fix_incorrect_ids(silent=True)
+
+        def complete():
+            if success_count > 0:
+                if error_count > 1:
+                    messagebox.showwarning(
+                        "Warning", f"{success_count} succeed\n{error_count} failed."
+                    )
+                elif error_count == 1:
+                    messagebox.showwarning(
+                        "Warning",
+                        f"{success_count} succeed\n{error_count} failed: {last_reason}",
+                    )
+                else:
+                    msg_info("Success", f"Effects pasted to {success_count} relics")
+            else:
+                if error_count > 1:
+                    messagebox.showerror("Error", "Failed to paste effects.")
+                elif error_count == 1:
+                    messagebox.showerror(
+                        "Error", f"Failed to paste effects: {last_reason}"
+                    )
+            self.refresh_inventory_and_vessels()
+
+        self.run_task_async(task, callback=complete)
+
+    def copy_selected_relic_effects(self):
         """Copy effects from selected relic to clipboard"""
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
+            msg_warning("Warning", "No relic selected")
             return
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        self.copy_relic_effects(ga_handles)
 
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        item_id = int(tags[1])
-
-        # Find the relic data
-
-        try:
-            real_id = self.inventory_handler.relics[ga_handle].state.real_item_id
-            effects = self.inventory_handler.relics[ga_handle].state.effects_and_curses
-            _item = self.game_data.relics.get(item_id)
-            item_name = _item.name if _item else f"Unknown ({item_id})"
-            self.clipboard_effects = (effects, real_id, item_name)
-            messagebox.showinfo(
-                "Copied",
-                f"Copied effects from:\n{item_name}\n\nEffects: {len([e for e in effects if e != 0])} effect(s)",
-            )
-            return
-        except KeyError:
-            messagebox.showerror("Error", "Could not find relic data")
-
-    def paste_relic_effects(self):
+    def paste_selected_relic_effects(self):
         """Paste copied effects to selected relic"""
-        if not self.clipboard_effects:
-            messagebox.showwarning(
-                "Warning",
-                "No effects copied. Right-click a relic and select 'Copy Effects' first.",
-            )
-            return
-
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("Warning", "No relic selected")
+            msg_warning("Warning", "No relic selected")
             return
 
-        item = selection[0]
-        tags = self.tree.item(item, "tags")
-        ga_handle = int(tags[0])
-        item_id = int(tags[1])
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        self.paste_relic_effects(ga_handles)
 
-        # Get target relic info
-        target_name = self.game_data.relics[item_id].name
-        source_effects, source_id, source_name = self.clipboard_effects
-
-        # Build effect names for display
-        effect_names = []
-        for eff_id in source_effects:
-            if eff_id != 0:
-                eff = self.game_data.effects.get(eff_id)
-                eff_name = eff.name if eff else f"Unknown ({eff_id})"
-                effect_names.append(eff_name)
-
-        # Confirm paste
-        msg = f"Paste effects from:\n  {source_name}\n\nTo:\n  {target_name}\n\n"
-        msg += f"Effects to paste ({len(effect_names)}):\n"
-        for name in effect_names[:6]:
-            msg += f"  • {name}\n"
-        msg += "\nProceed?"
-
-        if not messagebox.askyesno("Confirm Paste", msg):
+    def reindex_selected_relic(self):
+        """Set the acquisition index of the selected relic"""
+        selection = self.tree.selection()
+        if not selection:
+            msg_warning("Warning", "No relic selected")
             return
 
-        # Check if this would make the relic illegal
-        if self.relic_checker:
-            would_be_illegal = self.relic_checker.check_invalidity(
-                item_id, source_effects
-            )
-            if would_be_illegal:
-                warn_msg = (
-                    "⚠️ Warning: These effects may not be valid for this relic type.\n\n"
-                )
-                warn_msg += "The relic may be flagged as illegal after pasting.\n\nContinue anyway?"
-                if not messagebox.askyesno(
-                    "Invalid Effects Warning", warn_msg, icon="warning"
-                ):
-                    return
+        target_index = ui.ask_for_int(
+            self.root,
+            title=_("Move Index"),
+            prompt=_("Move to After (#):"),
+            initial=None,
+            note=_("Note: This will also affect the 'Acquisition Time' sorting in-game."),
+        )
+        if not target_index:
+            return
 
-        # Apply the effects
-        try:
-            if self.inventory_handler.modify_relic(ga_handle, item_id, *source_effects):
-                msg_info("Success", f"Effects pasted to {target_name}")
-                self.refresh_inventory_and_vessels()
-                save_current_data()
-        except Exception as e:
-            messagebox.showerror("Error", "Failed to paste effects:\n" + str(e))
+        target_index = min(max(0, target_index), len(self.all_relics))
+
+        tags = [self.tree.item(item, "tags") for item in selection]
+        ga_handles = [int(tag[0]) for tag in tags]
+        ga_handles.reverse()
+
+        if target_index >= len(self.all_relics):
+            new_acq_id = self.inventory_handler.request_new_acquisition_id()
+        else:
+            rank_order = sorted(self.all_relics, key=lambda x: x["acquisition_rank"])
+            new_acq_id = rank_order[target_index]["acquisition_index"]
+        self.inventory_handler.reindex_acquisition_id_at(new_acq_id, *ga_handles)
+        self.refresh_inventory_lightly()
+
+        # Resort by index
+        self.sort_reverse = False
+        self.sort_column = "#"
+        self.sort_by_column("#")
+
+        # Select the reindexed relic in the UI after refreshing
+        items = self.tree.get_children()
+        first_index = -1
+        for i, relic in enumerate(self.all_relics):
+            if relic["ga"] == ga_handles[-1]:
+                first_index = i
+        self.tree.selection_set(items[first_index : first_index + len(ga_handles)])
 
     def modify_selected_relic(self):
         selection = self.tree.selection()
@@ -5739,7 +5214,7 @@ class SaveEditorGUI:
 
         # Check if multiple items selected
         if len(selection) > 1:
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete {len(selection)} relics?",
             )
@@ -5747,42 +5222,56 @@ class SaveEditorGUI:
             item = selection[0]
             tags = self.tree.item(item, "tags")
             item_id = int(tags[1])
-            result = messagebox.askyesno(
+            confirmed = messagebox.askyesno(
                 "Confirm Delete",
                 f"Are you sure you want to delete this relic (ID: {item_id})?",
             )
+        if not confirmed:
+            return
 
-        if result:
-            deleted_count = 0
-            failed_count = 0
+        stats = {
+            "success_count": 0,
+            "fail_count": 0,
+            "last_reason": "",
+        }
 
+        def task():
             for item in selection:
                 tags = self.tree.item(item, "tags")
                 ga_handle = int(tags[0])
-                item_id = int(tags[1])
-
                 try:
-                    del_result = self.inventory_handler.remove_relic_from_inventory(
-                        ga_handle
-                    )
+                    self.inventory_handler.remove_relic_from_inventory(ga_handle)
+                    stats["success_count"] += 1
                 except Exception as e:
-                    del_result = False
+                    stats["fail_count"] += 1
+                    stats["last_reason"] = str(e)
 
-                if del_result:
-                    deleted_count += 1
-                else:
-                    failed_count += 1
-
-            if deleted_count > 0:
-                messagebox.showinfo(
-                    "Success",
-                    f"Deleted {deleted_count} relic(s) successfully"
-                    + (f"\n{failed_count} failed" if failed_count > 0 else ""),
+        def complete():
+            success_count = stats["success_count"]
+            fail_count = stats["fail_count"]
+            last_reason = stats["last_reason"]
+            reason_string = f"\n{last_reason}." if fail_count == 1 else ""
+            if fail_count == 0:
+                msg_info("Success", f"Deleted {success_count} relic(s).")
+            elif success_count > 0:
+                messagebox.showwarning(
+                    "Warning",
+                    f"Deleted {success_count} relic(s) successfully."
+                    f"\n{fail_count} failed."
+                    f"{reason_string}",
                 )
+            else:
+                messagebox.showerror(
+                    "Error",
+                    f"Delete failed."
+                    f"{reason_string}",
+                )
+
+            if success_count>0:
                 self.refresh_inventory_lightly()
                 save_current_data()
-            else:
-                messagebox.showerror("Error", "Failed to delete relics")
+
+        self.run_task_async(task, callback=complete)
 
     def select_all_relics(self):
         """Select all relics in the tree"""
@@ -5804,69 +5293,7 @@ class SaveEditorGUI:
         self.tree.selection_remove(self.tree.selection())
         self.tree.selection_set(new_selection)
 
-    def mass_delete_relics(self):
-        """Delete all currently selected relics"""
-        selection = self.tree.selection()
-        if not selection:
-            msg_warning(
-                "Warning",
-                "No relics selected. Use the tree selection to choose relics to delete.",
-            )
-            return
-
-        # Check for forbidden relics in selection
-        forbidden_count = 0
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            if "forbidden" in tags:
-                forbidden_count += 1
-
-        # Confirmation message
-        confirm_msg = (
-            f"Are you sure you want to delete {len(selection)} selected relic(s)?"
-        )
-        if forbidden_count > 0:
-            confirm_msg += (
-                f"\n\n⚠️ WARNING: {forbidden_count} of these are 'Do Not Edit' relics!"
-            )
-            confirm_msg += "\n\nDeleting these may cause issues!"
-
-        result = messagebox.askyesno(
-            "Confirm Mass Delete",
-            confirm_msg,
-            icon="warning" if forbidden_count > 0 else "question",
-        )
-
-        if not result:
-            return
-
-        # Delete all selected relics
-        deleted_count = 0
-        failed_count = 0
-
-        for item in selection:
-            tags = self.tree.item(item, "tags")
-            ga_handle = int(tags[0])
-            item_id = int(tags[1])
-
-            result = self.inventory_handler.remove_relic_from_inventory(ga_handle)
-            if result:
-                deleted_count += 1
-            else:
-                failed_count += 1
-
-        # Show result
-        if deleted_count > 0:
-            message = f"Successfully deleted {deleted_count} relic(s)"
-            if failed_count > 0:
-                message += f"\n{failed_count} failed to delete"
-            messagebox.showinfo("Mass Delete Complete", message)
-            self.refresh_inventory_lightly()
-            save_current_data()
-        else:
-            messagebox.showerror("Error", "Failed to delete any relics")
-
-    def mass_fix_incorrect_ids(self):
+    def mass_fix_incorrect_ids(self, silent=False):
         """Find and fix all problematic relics (illegal and strict invalid)"""
         global userdata_path
 
@@ -6050,7 +5477,7 @@ class SaveEditorGUI:
                 if len(unfixable_relics) > 5:
                     msg += f"... and {len(unfixable_relics) - 5} more\n"
                 msg += "\nThese may need manual effect changes."
-            messagebox.showinfo("Mass Fix", msg)
+            silent or messagebox.showinfo("Mass Fix", msg)
             return
 
         # Show confirmation with details
@@ -6084,7 +5511,7 @@ class SaveEditorGUI:
 
         details += "\n\nProceed with fixing these relics?"
 
-        result = messagebox.askyesno("Confirm Mass Fix", details)
+        result = silent or messagebox.askyesno("Confirm Mass Fix", details)
         if not result:
             return
 
@@ -6134,8 +5561,9 @@ class SaveEditorGUI:
         if failed_count > 0:
             message += f"\n\n{failed_count} failed to fix"
 
-        messagebox.showinfo("Mass Fix Complete", message)
-        self.refresh_inventory_lightly()
+        if not silent:
+            messagebox.showinfo("Mass Fix Complete", message)
+            self.refresh_inventory_lightly()
 
     def add_relic_tk(self):
         if globals.data is None:
@@ -6143,73 +5571,54 @@ class SaveEditorGUI:
                 "Warning", "No save file loaded. Please open a save file first."
             )
             return
-        
-        # 弹出数量输入对话框
-        count_str = simpledialog.askinteger(
-            "Add Relics",
-            "Enter number of relics to add (1-1000):",
-            minvalue=1,
-            maxvalue=1000,
-            initialvalue=1
-        )
-        
-        if count_str is None:
+
+        result = ui.ask_for_relic_type(self.root)
+        if not result:
             return
-        
-        count = count_str
-        
-        relic_type_selector = RelicTypeSelector(self.root)
-        if not relic_type_selector.result:
-            return
-        
-        try:
-            if count == 1:
-                # 原有的单个添加逻辑
-                added_result, new_ga = self.inventory_handler.add_relic_to_inventory(
-                    relic_type=relic_type_selector.result
-                )
-                if added_result:
-                    msg_info("Success", "Dummy relic added. Refreshing inventory.")
-                    self.refresh_inventory_and_vessels()
-                    # Find Added item by new_ga
-                    for item in self.tree.get_children():
-                        item_ga = int(self.tree.item(item, "tags")[0])
-                        if item_ga == new_ga:
-                            self.tree.selection_set(item)
-                            self.tree.focus(item)
-                            self.tree.see(item)
-                            break
-                    self.modify_selected_relic()
-            else:
-                # 批量添加逻辑
-                added_count = 0
-                last_ga = None
-                for _ in range(count):
-                    added_result, new_ga = self.inventory_handler.add_relic_to_inventory(
-                        relic_type=relic_type_selector.result
+
+        stats = {
+            "success_count": 0,
+            "error": False,
+            "reason": "",
+            "last_ga": -1,
+        }
+
+        def task():
+            for _ in range(result.count):
+                try:
+                    _, new_ga = self.inventory_handler.add_relic_to_inventory(
+                        result.relic_type
                     )
-                    if added_result:
-                        added_count += 1
-                        last_ga = new_ga
-                    else:
-                        break
-                
-                if added_count > 0:
-                    msg_info("Success", f"{added_count} dummy relic(s) added. Refreshing inventory.")
-                    self.refresh_inventory_and_vessels()
-                    if last_ga is not None:
-                        for item in self.tree.get_children():
-                            item_ga = int(self.tree.item(item, "tags")[0])
-                            if item_ga == last_ga:
-                                self.tree.selection_set(item)
-                                self.tree.focus(item)
-                                self.tree.see(item)
-                                break
-                        self.modify_selected_relic()
-                else:
-                    messagebox.showerror("Error", "Failed to add any relics.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to add relic(s): {e}")
+                    stats["success_count"] += 1
+                    stats["last_ga"] = new_ga
+                except Exception as e:
+                    stats["error"] = True
+                    stats["reason"] = str(e)
+                    break
+
+        def complete():
+            self.refresh_inventory_and_vessels()
+
+            if stats["error"]:
+                messagebox.showerror(
+                    "Error",
+                    f"An error occurred while adding relic #{stats['success_count']+1}"
+                    f"\n{stats['reason']}",
+                )
+                return
+            msg_info("Success", f"{stats['success_count']} dummy relic(s) added.")
+
+            # Find the added item by last_ga
+            for item in self.tree.get_children():
+                item_ga = int(self.tree.item(item, "tags")[0])
+                if item_ga == stats["last_ga"]:
+                    self.tree.selection_set(item)
+                    self.tree.focus(item)
+                    self.tree.see(item)
+                    break
+            self.modify_selected_relic()
+
+        self.run_task_async(task, callback=complete)
 
     def _find_valid_relic_id_for_effects(self, current_id, effects):
         """Find a valid relic ID that can have the given effects (must be same color)"""
@@ -6396,14 +5805,67 @@ class SaveEditorGUI:
         else:
             messagebox.showerror("Error", message)
 
-    def import_save_tk(self):
-        import_save()
-        self.load_character(userdata_path)
+    def on_replace_character_click(self):
+        if globals.data is None:
+            messagebox.showerror("Error", "Please load a character first")
+            return
+
+        import_save_file = filedialog.askopenfilename(
+            filetypes=(("Save File", ("*.sl2", "*.co2", "*.dat")), ("All Files", "*"))
+        )
+        if not import_save_file:
+            return
+
+        packer.unpack(import_save_file, UNPACK_DIR_IMPORT)
+        char_table = name_to_path(UNPACK_DIR_IMPORT)
+
+        def replace(new_userdata_path: str):
+            path = userdata_path
+            old_name = InventoryHandler.get_player_name_from_data(globals.data)
+            index = self.char_table.index((old_name, path))
+            self.replace_character(new_userdata_path)
+            new_name = InventoryHandler.get_player_name_from_data(globals.data)
+            msg_info("Success", f"Successfully replace {old_name} <- {new_name}")
+            popup.destroy()
+            self.update_char_table()
+            self.on_character_click(index)
+
+        popup = tk.Toplevel(self.root)
+        self.color_theme.apply(popup)
+        popup.title("Select Character to replace")
+        frame = ttk.Frame(popup)
+        frame.pack()
+        label = ttk.Label(frame, text="Choose a character:")
+        label.pack(pady=10)
+        for name, path in char_table:
+            btn = ttk.Button(
+                frame,
+                text=name,
+                width=30,
+                command=lambda p=path: replace(p),
+            )
+            btn.pack(pady=1)
+
+    def replace_character(self, new_userdata_path: str):
+        current_steam_id = packer.read_steam_id(UNPACK_DIR)
+        try:
+            packer.patch_steam_id(new_userdata_path, current_steam_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to patch steam ID: {e}")
+            return
+
+        with open(new_userdata_path, "rb") as f:
+            imported_data = f.read()
+        if len(imported_data) <= len(globals.data):
+            globals.data = imported_data + globals.data[len(imported_data) :]
+        else:
+            globals.data = imported_data[: len(globals.data)]
+        save_current_data()
 
     def save_changes(self):
         if globals.data and userdata_path:
-            save_file()
-            messagebox.showinfo("Success", "Changes saved to file")
+            if save_file():
+                messagebox.showinfo("Success", "Changes saved to file")
         else:
             messagebox.showwarning("Warning", "No character loaded")
 
@@ -6424,7 +5886,8 @@ class ModifyRelicDialog:
         self.dialog.transient(parent)
         self._set_position(parent)
 
-        self.safe_mode_var = tk.BooleanVar(value=True)
+        self.safe_mode_var = ui.vars.safe_mode
+        self.auto_fix_var = ui.vars.auto_fix
         self.game_data = SourceDataHandler()
         self.relic_checker = RelicChecker()
         self.inventory = InventoryHandler()
@@ -6502,8 +5965,8 @@ class ModifyRelicDialog:
                 else:
                     self.effect_name_labels[i].config(text="Unknown Effect")
 
-        # Update curse indicators after loading
-        self._update_curse_indicators()
+        # Update effect indicators after loading
+        self._update_effect_indicators()
 
     def _update_color_display(self):
         """Update the current color label"""
@@ -6552,9 +6015,12 @@ class ModifyRelicDialog:
         self._update_color_display()
         self._update_relic_structure_display()
         self._update_relic_type_display()
-        item_id = int(self.item_id_entry.get())
-        item_name = self.game_data.relics[item_id].name
-        self.title_var.set(item_name)
+        try:
+            item_id = int(self.item_id_entry.get())
+            item_name = self.game_data.relics[item_id].name
+            self.title_var.set(item_name)
+        except:
+            self.title_var.set("Unknown")
 
     def _update_relic_type_display(self):
         """Update the relic type indicator (Original vs Scene/1.02)"""
@@ -7054,12 +6520,20 @@ class ModifyRelicDialog:
         modifier_frame.pack(fill="x", pady=5)
         self.safe_mode_cb = ttk.Checkbutton(
             modifier_frame,
-            text="Safe Mode: Auto-filter legal effects",
+            text="Search legal effects only",
             variable=self.safe_mode_var,
             onvalue=True,
             offvalue=False,
         )
         self.safe_mode_cb.pack(anchor="w")
+        self.auto_fix_cb = ttk.Checkbutton(
+            modifier_frame,
+            text="Auto-Fix on Apply Changes",
+            variable=self.auto_fix_var,
+            onvalue=True,
+            offvalue=False,
+        )
+        self.auto_fix_cb.pack(anchor="w")
 
         # Item ID section (optional modification)
         item_frame = ttk.LabelFrame(scrollable_frame, text="Relic Item ID", padding=10)
@@ -7104,7 +6578,7 @@ class ModifyRelicDialog:
         item_entry_frame.pack(fill="x", pady=5)
 
         self.item_id_var = tk.StringVar()
-        self.item_id_var.trace("w", lambda *args: self._on_item_id_change())
+        self.item_id_var.trace_add("write", lambda *args: self._on_item_id_change())
         self.item_id_entry = ttk.Entry(
             item_entry_frame, width=15, textvariable=self.item_id_var
         )
@@ -7204,8 +6678,16 @@ class ModifyRelicDialog:
             entry_frame = ttk.Frame(effect_frame)
             entry_frame.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(0, 5))
 
+            def validate(P: str):
+                return re.fullmatch(r"-?\d*", P) is not None
+
             # Manual entry
-            entry = ttk.Entry(entry_frame, width=15)
+            entry = ttk.Entry(
+                entry_frame,
+                width=15,
+                validate="key",
+                validatecommand=(self.dialog.register(validate), "%P"),
+            )
             entry.pack(side="left", padx=5)
             entry.bind("<KeyRelease>", lambda e, idx=i: self.on_effect_change(idx))
             self.effect_entries.append(entry)
@@ -7324,14 +6806,14 @@ class ModifyRelicDialog:
         # This handles cases where selected effect needs a curse
         self._auto_find_valid_relic_id()
 
-        # Update curse indicators when effect or curse slots change
-        self._update_curse_indicators()
+        # Update effect indicators when effect or curse slots change
+        self._update_effect_indicators()
 
         self.update_debug_info()
 
-    def _update_curse_indicators(self):
-        """Update curse slot labels to show which ones NEED to be filled"""
-        effect_labels_base = [
+    def _update_effect_indicator(self, slot_index: int):
+        """Update effect label to show validation status"""
+        effect_labels = [
             "Effect 1",
             "Effect 2",
             "Effect 3",
@@ -7340,46 +6822,85 @@ class ModifyRelicDialog:
             "Curse 3",
         ]
 
-        for i in range(3):
-            effect_idx = i
-            curse_idx = i + 3
+        label = effect_labels[slot_index]
+        try:
+            effect_id = int(self.effect_entries[slot_index].get())
+        except ValueError:
+            effect_id = 0
+        is_curse_slot = slot_index >= 3
 
+        # Check compatibility
+        try:
+            conflict_id = self.game_data.effects[effect_id].conflict_id
+        except KeyError:
+            conflict_id = -1
+        if conflict_id != -1:
+            for slot_index2 in range(3) if not is_curse_slot else range(3, 6):
+                if slot_index == slot_index2:
+                    continue
+
+                label2 = effect_labels[slot_index2]
+                try:
+                    effect_id2 = int(self.effect_entries[slot_index2].get())
+                except ValueError:
+                    effect_id2 = 0
+                try:
+                    conflict_id2 = self.game_data.effects[effect_id2].conflict_id
+                except KeyError:
+                    conflict_id2 = -1
+
+                if conflict_id2 == -1:
+                    continue
+
+                if conflict_id == conflict_id2:
+                    self.slot_labels[slot_index].config(
+                        text=f"⚠️ {label} (Conflicts with {label2}):",
+                        style="illegal.TLabel",
+                    )
+                    return
+
+        # Check curse
+        if is_curse_slot:
+            related_slot_index = slot_index - 3
             try:
-                effect_id = int(self.effect_entries[effect_idx].get())
-                curse_id = int(self.effect_entries[curse_idx].get())
+                related_effect_id = int(self.effect_entries[related_slot_index].get())
             except ValueError:
-                effect_id = 0
-                curse_id = 0
+                related_effect_id = 0
 
-            # Check if this effect needs a curse
-            needs_curse = False
-            has_curse = curse_id not in [0, -1, 4294967295]
-
-            if effect_id not in [0, -1, 4294967295]:
-                needs_curse = self.game_data.effect_needs_curse(effect_id)
+            needs_curse = self.game_data.effect_needs_curse(related_effect_id)
+            has_curse = effect_id not in (0, -1, 4294967295)
 
             # Update the curse slot label
-            base_label = effect_labels_base[curse_idx]
             if needs_curse and not has_curse:
                 # Needs curse but doesn't have one - show warning
-                self.slot_labels[curse_idx].config(
-                    text=f"⚠️ {base_label} (REQUIRED):", foreground="red"
+                self.slot_labels[slot_index].config(
+                    text=f"⚠️ {label} (REQUIRED):", style="illegal.TLabel"
                 )
             elif needs_curse and has_curse:
                 # Needs curse and has one - show satisfied
-                self.slot_labels[curse_idx].config(
-                    text=f"✓ {base_label}:", foreground="green"
+                self.slot_labels[slot_index].config(
+                    text=f"✓ {label}:", style="valid.TLabel"
                 )
             elif not needs_curse and has_curse:
                 # Doesn't need curse but has one - ILLEGAL
-                self.slot_labels[curse_idx].config(
-                    text=f"⛔ {base_label} (ILLEGAL - remove curse):", foreground="red"
+                self.slot_labels[slot_index].config(
+                    text=f"⛔ {label} (ILLEGAL - remove curse):",
+                    style="illegal.TLabel",
                 )
             else:
                 # Doesn't need curse and doesn't have one - correct
-                self.slot_labels[curse_idx].config(
-                    text=f"{base_label} (not needed):", foreground="gray"
+                self.slot_labels[slot_index].config(
+                    text=f"{label} (not needed):", style="TLabel"
                 )
+            return
+
+        # Default no special indicator
+        self.slot_labels[slot_index].config(text=f"{label}:", style="TLabel")
+
+    def _update_effect_indicators(self):
+        """Update all effect indicators"""
+        for i in range(6):
+            self._update_effect_indicator(i)
 
     def search_items(self):
         """Open search dialog for items"""
@@ -7857,38 +7378,17 @@ class ModifyRelicDialog:
                 messagebox.showerror("Error", "Invalid relic ID in entry field")
                 return
 
-            try:
-                _effects = [int(entry.get()) for entry in self.effect_entries]
-                _pools = self.game_data.get_adjusted_pool_sequence(
-                    _cut_relic_id, _effects
-                )
-                _pool_id = _pools[effect_index]
-            except (KeyError, IndexError, ValueError) as e:
-                messagebox.showerror(
-                    "Error", f"Could not get pool for relic {_cut_relic_id}: {e}"
-                )
-                return
-
-            _pool_effects = self.game_data.get_pool_rollable_effects(_pool_id)
-
-            # For curse slots (index >= 3), if this specific pool is disabled,
-            # use ALL available curse pools combined (game rearranges internally)
-            if not _pool_effects and is_curse_slot:
-                # Combine effects from all available curse pools
-                all_curse_effects = set()
-                for i in range(3):
-                    curse_pool = _pools[3 + i]
-                    if curse_pool != -1:
-                        pool_effects = self.game_data.get_pool_rollable_effects(
-                            curse_pool
-                        )
-                        all_curse_effects.update(pool_effects)
-                _pool_effects = list(all_curse_effects)
+            if is_curse_slot:
+                pool_type = "curse"
+            elif self.game_data.is_deep_relic(_cut_relic_id):
+                pool_type = "deep"
+            else:
+                pool_type = "normal"
+            _pool_effects = self.game_data.get_rollable_effects(pool_type)
 
             if not _pool_effects:
                 # Slot is disabled and no alternatives available
                 slot_type = "effect" if effect_index < 3 else "curse"
-                slot_num = (effect_index % 3) + 1
                 self.effect_entries[effect_index].delete(0, tk.END)
                 self.effect_entries[effect_index].insert(0, str(0xFFFFFFFF))
                 self.on_effect_change(effect_index)
@@ -7903,62 +7403,43 @@ class ModifyRelicDialog:
             _effect_params_df = _effect_params_df[
                 _effect_params_df.index.isin(_pool_effects)
             ]
-            match effect_index:
-                case 1:
-                    _effect_id_1 = int(self.effect_entries[0].get())
-                    _conflic_id_1 = self.game_data.effects[_effect_id_1].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (_effect_params_df["compatibilityId"] != _conflic_id_1)
-                    ]
-                case 2:
-                    _effect_id_1 = int(self.effect_entries[0].get())
-                    _conflic_id_1 = self.game_data.effects[_effect_id_1].conflict_id
-                    _effect_id_2 = int(self.effect_entries[1].get())
-                    _conflic_id_2 = self.game_data.effects[_effect_id_2].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (
-                            (_effect_params_df["compatibilityId"] != _conflic_id_1)
-                            & (_effect_params_df["compatibilityId"] != _conflic_id_2)
-                        )
-                    ]
-                case 4:
-                    _effect_id_4 = int(self.effect_entries[3].get())
-                    _conflic_id_4 = self.game_data.effects[_effect_id_4].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (_effect_params_df["compatibilityId"] != _conflic_id_4)
-                    ]
-                case 5:
-                    _effect_id_4 = int(self.effect_entries[3].get())
-                    _conflic_id_4 = self.game_data.effects[_effect_id_4].conflict_id
-                    _effect_id_5 = int(self.effect_entries[4].get())
-                    _conflic_id_5 = self.game_data.effects[_effect_id_5].conflict_id
-                    _effect_params_df = _effect_params_df[
-                        (_effect_params_df["compatibilityId"] == -1)
-                        | (
-                            (_effect_params_df["compatibilityId"] != _conflic_id_4)
-                            & (_effect_params_df["compatibilityId"] != _conflic_id_5)
-                        )
-                    ]
+
             _items = _effect_params_df.index.tolist()
+            _warned_items = []
+            # Warn conflicting effects
+            for i in range(3) if not is_curse_slot else range(3, 6):
+                if i == effect_index:
+                    continue
+                try:
+                    _effect_id = int(self.effect_entries[i].get())
+                except ValueError:
+                    _effect_id = 0xFFFFFFFF
+                try:
+                    _conflic_id = self.game_data.effects[_effect_id].conflict_id
+                except KeyError:
+                    _conflic_id = -1
+                _compatible_effect_params_df = _effect_params_df[
+                    (_effect_params_df["compatibilityId"] == -1)
+                    | (_effect_params_df["compatibilityId"] != _conflic_id)
+                ]
+                _compatible_items = _compatible_effect_params_df.index.tolist()
+                _warned_items.extend(
+                    item for item in _items if item not in _compatible_items
+                )
+            _warned_items = list(set(_warned_items))  # Remove duplicates
+
+            # Add "Empty" effect at the top
+            _items.insert(0, 0xFFFFFFFF)
         else:
             _items = [int(k) for k in self.game_data.effects.keys()]
+            _warned_items = []
 
-        # For curse slots, add "No Curse (Empty)" option at the top
-        if is_curse_slot:
-            _items.insert(0, 0xFFFFFFFF)
-
-        # Build dialog title with relic type info in safe mode
+        # Build dialog title with slot type in safe mode
         if self.safe_mode_var.get():
-            relic_type, _, _ = self.game_data.get_relic_type_info(_cut_relic_id)
             slot_type = "Curse" if is_curse_slot else "Effect"
-            dialog_title = (
-                f"Select {slot_type} {(effect_index % 3) + 1} — {relic_type} Pools"
-            )
+            dialog_title = f"Select {slot_type} {(effect_index % 3) + 1}"
         else:
-            dialog_title = f"Select Effect {effect_index + 1} — All Effects (Unsafe)"
+            dialog_title = f"Select Effect {effect_index + 1} (Unsafe)"
 
         SearchDialog(
             self.dialog,
@@ -7967,6 +7448,7 @@ class ModifyRelicDialog:
             _items,
             dialog_title,
             lambda item_id: self.on_effect_selected(effect_index, item_id),
+            _warned_items,
         )
 
     def on_item_selected(self, item_id):
@@ -7982,17 +7464,32 @@ class ModifyRelicDialog:
         self.effect_entries[effect_index].insert(0, str(effect_id))
         self.on_effect_change(effect_index)
 
-    def apply_changes(self):
-        # Extract effect IDs from entries
-        new_effects = []
-
+    def auto_fix_entries(self):
         for entry in self.effect_entries:
             try:
                 value = int(entry.get())
-                new_effects.append(value)
             except ValueError:
-                new_effects.append(0)
-        new_effects = self.relic_checker.sort_effects(new_effects)
+                value = 0xFFFFFFFF
+            if value == 0 or value not in self.game_data.effects:
+                value = 0xFFFFFFFF
+            entry.delete(0, tk.END)
+            entry.insert(0, str(value))
+
+    def apply_changes(self):
+        assert self.relic_checker is not None, "Relic checker not initialized"
+
+        if self.auto_fix_var.get():
+            self.auto_fix_entries()
+            self.auto_sort_effects()
+
+        # Extract effect IDs from entries
+        new_effects = []
+        for entry in self.effect_entries:
+            try:
+                value = int(entry.get())
+            except ValueError:
+                value = 0xFFFFFFFF
+            new_effects.append(value)
 
         # Check if item ID was changed
         new_item_id = None
@@ -8067,8 +7564,18 @@ class SearchDialog:
     game_data: Optional[SourceDataHandler] = None
     relic_checker: Optional[RelicChecker] = None
 
-    def __init__(self, parent, item_id, search_type, id_list, title, callback):
+    def __init__(
+        self,
+        parent,
+        item_id,
+        search_type,
+        id_list,
+        title,
+        callback,
+        warned_id_list: list[int] | None = None,
+    ):
         self.id_list = id_list
+        self.warned_id_list = [] if warned_id_list is None else warned_id_list
         self.callback = callback
         self.search_type = search_type
         self.item_id = item_id
@@ -8123,7 +7630,7 @@ class SearchDialog:
             side="left", padx=5
         )
         self.search_var = tk.StringVar()
-        self.search_var.trace("w", lambda *args: self.filter_results())
+        self.search_var.trace_add("write", lambda *args: self.filter_results())
 
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True, padx=5)
@@ -8191,8 +7698,8 @@ class SearchDialog:
             checkbox_lock_color.pack(side="left", padx=5, pady=5)
             combobox_color.pack(side="left", padx=5, pady=5)
 
-            self.lock_color_var.trace("w", lambda *args: self.filter_results())
-            self.color_var.trace("w", lambda *args: self.filter_results())
+            self.lock_color_var.trace_add("write", lambda *args: self.filter_results())
+            self.color_var.trace_add("write", lambda *args: self.filter_results())
             self.color_var.trace_add("write", lambda *args: color_map_to_int())
 
             # Relic Type Row
@@ -8208,7 +7715,7 @@ class SearchDialog:
                 state="readonly",
             )
             combobox_type.pack(side="left")
-            self.relic_type_var.trace("w", lambda *args: self.filter_results())
+            self.relic_type_var.trace_add("write", lambda *args: self.filter_results())
 
             # Structure filters
             ttk.Label(filter_frame, text="Effect Slots:").pack(
@@ -8310,6 +7817,27 @@ class SearchDialog:
             side="right", padx=5
         )
 
+    @staticmethod
+    def to_halfwidth(text: str):
+        fullwidth_to_halfwidth = {
+            "０": "0",
+            "１": "1",
+            "２": "2",
+            "３": "3",
+            "４": "4",
+            "５": "5",
+            "６": "6",
+            "７": "7",
+            "８": "8",
+            "９": "9",
+            "＋": "+",
+        }
+
+        def replace(match):
+            return fullwidth_to_halfwidth.get(match.group(0), match.group(0))
+
+        return re.sub(r"[０-９]", replace, text)
+
     def filter_results(self):
         search_term = self.search_var.get().lower()
 
@@ -8348,8 +7876,18 @@ class SearchDialog:
                     if self.curse_slots_var.get() != str(curse_slots):
                         continue
 
-            if search_term in name.lower() or search_term in item_id:
-                self.listbox.insert(tk.END, f"{name} (ID: {item_id})")
+            sub_terms = search_term.split(" ")
+            for sub_term in sub_terms:
+                if sub_term in self.to_halfwidth(name.lower()):
+                    continue
+                if sub_term in item_id:
+                    continue
+                break
+            else:
+                self.listbox.insert(
+                    tk.END,
+                    f"{'⚠️ '*(int(item_id) in self.warned_id_list)}{name} (ID: {item_id})",
+                )
 
     def on_select(self, event=None):
         selection = self.listbox.curselection()
@@ -8361,76 +7899,6 @@ class SearchDialog:
 
         self.callback(int(item_id))
         self.dialog.destroy()
-
-
-import tkinter as tk
-from tkinter import ttk
-
-
-class RelicTypeSelector(tk.Toplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Select Relic Type")
-        self.result = None
-
-        self.resizable(False, False)
-
-        main_frame = ttk.Frame(self, padding="10 10 10 10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(
-            main_frame,
-            text="Select relic type to create.\nNote: Type cannot be changed later.",
-            justify=tk.CENTER,
-        ).pack(pady=10)
-
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(pady=5)
-
-        ttk.Button(
-            btn_frame,
-            text="Normal",
-            command=lambda: self.set_result("normal"),
-            style="NormalRelic.TButton",
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            btn_frame,
-            text="Deep",
-            command=lambda: self.set_result("deep"),
-            style="DeepRelic.TButton",
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(
-            btn_frame, text="Cancel", command=lambda: self.set_result(None)
-        ).pack(side=tk.LEFT, padx=5)
-
-        self.protocol("WM_DELETE_WINDOW", lambda: self.set_result(None))
-
-        self.center_window(parent)
-        self.focus_force()
-
-        self.transient(parent)
-        self.grab_set()
-        self.wait_window(self)
-
-    def center_window(self, parent):
-        self.update_idletasks()
-
-        w = self.winfo_width()
-        h = self.winfo_height()
-
-        parent_w = parent.winfo_width()
-        parent_h = parent.winfo_height()
-        parent_x = parent.winfo_x()
-        parent_y = parent.winfo_y()
-
-        x = parent_x + (parent_w // 2) - (w // 2)
-        y = parent_y + (parent_h // 2) - (h // 2)
-
-        self.geometry(f"+{x}+{y}")
-
-    def set_result(self, value):
-        self.result = value
-        self.destroy()
 
 
 class LoadoutSelector(tk.Toplevel):
@@ -8631,9 +8099,21 @@ class LoadoutSelector(tk.Toplevel):
         return self.selected_vessels, self.selected_presets
 
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    # Handle KeyboardInterrupt for a exit
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+
+    traceback.print_exc()
+    logging.exception("Caught unhandled exception")
+    messagebox.showerror("Error", f"A fatal error occurred: {exc_value}")
+
+
 def main():
-    root = tk.Tk()
+    root = ui.root
     app = SaveEditorGUI(root)
+    root.report_callback_exception = handle_exception
     root.mainloop()
 
 
